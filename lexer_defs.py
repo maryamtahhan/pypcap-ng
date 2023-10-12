@@ -101,6 +101,18 @@ reserved = {
     'or' : 'OR',
     'and' : 'AND',
     'not' : 'NOT',
+    'ip' : 'IP',
+    'arp' : 'ARP',
+    'rarp' : 'RARP',
+    'sctp' : 'SCTP',
+    'tcp' : 'TCP',
+    'udp' : 'UDP',
+    'icmp' : 'ICMP',
+    'igmp' : 'IGMP',
+    'igrp' : 'IGRP',
+    'pim' : 'PIM',
+    'vrrp' : 'VRRP',
+    'carp' : 'CARP'
 }
 
 tokens = [

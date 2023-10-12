@@ -64,6 +64,13 @@ class Obj(Expr):
     def __repr__(self):
         return "[{}]".format(self.term)
 
+class Proto(Expr):
+    def __init__(self, proto):
+        self.proto = proto
+
+    def __repr__(self):
+        return "|{}|".format(self.proto)
+
 
 def p_binary_operators(p):
     '''expression : expression AND expression
@@ -82,11 +89,56 @@ def p_binary_operators(p):
 def p_term(p):
     '''term : qual id
             | NOT qual id
+            | proto
+            | NOT proto
     '''
     if len(p) == 4:
         p[0] = UnOp(Qual(p[3], p[2]), p[1])
     else:
         p[0] = Qual(p[2], p[1])
+
+def p_proto(p):
+    '''proto :  LINK
+	| IP
+	| ARP
+	| RARP
+	| SCTP
+	| TCP	
+	| UDP
+	| ICMP
+	| IGMP
+	| IGRP
+	| PIM	
+	| VRRP
+	| CARP
+	| ATALK
+	| AARP	
+	| DECNET
+	| LAT
+	| SCA
+	| MOPDL
+	| MOPRC
+	| IPV6	
+	| ICMPV6
+	| AH
+	| ESP
+	| ISO
+	| ESIS
+	| ISIS
+	| L1	
+	| L2
+	| IIH
+	| LSP
+	| SNP
+	| PSNP
+	| CSNP
+	| CLNP
+	| STP	
+	| IPX
+	| NETBEUI
+	| RADIO
+'''
+    p[0] = Proto(p[1])
 
 def p_qual(p):
     '''qual : SRC
