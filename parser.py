@@ -22,54 +22,43 @@ precedence = (
     ('left', 'LSH', 'RSH'),
 )
 
+LEFT = 'left'
+RIGHT = 'right'
+OP = 'op'
+OBJ = 'obj'
+QUAL = 'qual'
+OBJTYPE = 'obj_type'
+PROTO = 'proto'
 
-class Expr: pass
+class Expr(dict): pass
 
 class BinOp(Expr):
     def __init__(self, left, right, op):
-        self.left = left
-        self.right = right
-        self.op = op
-
-    def __repr__(self):
-        return "({}) {} ({})".format(self.left, self.op, self.right)
+        self[LEFT] = left
+        self[RIGHT] = right
+        self[OP] = op
 
 class Match(Expr):
     def __init__(self, obj):
-        self.obj = obj
-
-    def __repr__(self):
-        return "{}".format(self.obj)
+        self[OBJ] = obj
 
 class UnOp(Expr):
     def __init__(self, obj, op):
-        self.obj = obj
-        self.op = op
+        self[OBJ] = obj
+        self[OP] = op
 
-    def __repr__(self):
-        return "{}->{}".format(self.op, self.obj)
-
-class Qual(Expr):
-    def __init__(self, obj, qual):
-        self.obj = obj
-        self.qual = qual
-
-    def __repr__(self):
-        return "{}=>{}".format(self.qual, self.obj)
+class Head(Expr):
+    def __init__(self, qual):
+        self[QUAL] = qual
 
 class Obj(Expr):
-    def __init__(self, term):
-        self.term = term
-
-    def __repr__(self):
-        return "[{}]".format(self.term)
+    def __init__(self, obj, obj_type=None):
+        self[OBJ] = obj
+        self[OBJTYPE] = obj_type
 
 class Proto(Expr):
     def __init__(self, proto):
-        self.proto = proto
-
-    def __repr__(self):
-        return "|{}|".format(self.proto)
+        self[PROTO] = proto
 
 
 def p_binary_operators(p):
@@ -87,76 +76,127 @@ def p_binary_operators(p):
         p[0] = Match(p[1])
 
 def p_term(p):
-    '''term : qual id
-            | NOT qual id
-            | proto
-            | NOT proto
+    '''term     : rterm
+                | NOT rterm
     '''
-    if len(p) == 4:
-        p[0] = UnOp(Qual(p[3], p[2]), p[1])
+    if len(p) == 3:
+        p[0] = UnOp(p[2], p[1])
     else:
-        p[0] = Qual(p[2], p[1])
+        p[0] = p[1]
 
-def p_proto(p):
-    '''proto :  LINK
-	| IP
-	| ARP
-	| RARP
-	| SCTP
-	| TCP	
-	| UDP
-	| ICMP
-	| IGMP
-	| IGRP
-	| PIM	
-	| VRRP
-	| CARP
-	| ATALK
-	| AARP	
-	| DECNET
-	| LAT
-	| SCA
-	| MOPDL
-	| MOPRC
-	| IPV6	
-	| ICMPV6
-	| AH
-	| ESP
-	| ISO
-	| ESIS
-	| ISIS
-	| L1	
-	| L2
-	| IIH
-	| LSP
-	| SNP
-	| PSNP
-	| CSNP
-	| CLNP
-	| STP	
-	| IPX
-	| NETBEUI
-	| RADIO
+def p_rterm(p):   
+    '''rterm    : head id
+                | pname
+                | other
+    '''
+    if len(p) == 3:
+        p[0] = Obj(p[2], p[1])
+    else:
+        p[0] = p[1]
+
+def p_head(p):
+    '''head     : pname dqual aqual
+	            | pname dqual
+	            | pname aqual
+                | dqual aqual
+                | dqual
+                | aqual
+	            | pname PROTO
+	            | pname PROTOCHAIN
+                | pname GATEWAY
+                |
+    '''
+    p[0] = Head(p[1:])
+        
+
+def p_pname(p):
+    '''pname    : LINK
+                | IP
+                | ARP
+                | RARP
+                | SCTP
+                | TCP	
+                | UDP
+                | ICMP
+                | IGMP
+                | IGRP
+                | PIM	
+                | VRRP
+                | CARP
+                | ATALK
+                | AARP	
+                | DECNET
+                | LAT
+                | SCA
+                | MOPDL
+                | MOPRC
+                | IPV6	
+                | ICMPV6
+                | AH
+                | ESP
+                | ISO
+                | ESIS
+                | ISIS
+                | L1	
+                | L2
+                | IIH
+                | LSP
+                | SNP
+                | PSNP
+                | CSNP
+                | CLNP
+                | STP	
+                | IPX
+                | NETBEUI
+                | RADIO
 '''
     p[0] = Proto(p[1])
 
-def p_qual(p):
-    '''qual : SRC
-            | DST
-            | SRC OR DST
-            | DST OR SRC
-            | DST AND SRC
-            | SRC AND DST
-            | ADDR1
-            | ADDR2
-            | ADDR3
-            | ADDR4
-            | RA
-            | TA
-            | HOST
-            | NET
-            | PORT
-            | PORTRANGE
+def p_dqual(p):
+    '''dqual : SRC
+             | DST
+             | SRC OR DST
+             | DST OR SRC
+             | DST AND SRC
+             | SRC AND DST
+             | ADDR1
+             | ADDR2
+             | ADDR3
+             | ADDR4
+             | RA
+             | TA
+    '''
+    p[0] = p[1]
+
+def p_other(p):
+    '''other    : pname TK_BROADCAST
+                | pname TK_MULTICAST
+                | LESS NUM
+                | GREATER NUM
+                | INBOUND
+                | OUTBOUND
+                | IFINDEX NUM
+                | VLAN NUM	
+                | VLAN	
+                | MPLS NUM	
+                | MPLS
+                | PPPOED
+                | PPPOES NUM
+                | PPPOES
+                | GENEVE NUM
+                | GENEVE
+    '''
+    if len(p) == 2:
+        p[0] = Obj(None, obj_type=p[1])
+    else:
+        p[0] = Obj(p[2], obj_type=p[1])
+
+def p_aqual(p):
+    '''aqual : HOST
+             | NET
+             | PORT
+             | PORTRANGE
+             | GATEWAY
     '''
     p[0] = p[1]
 
