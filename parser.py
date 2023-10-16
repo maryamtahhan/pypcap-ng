@@ -16,50 +16,14 @@ import ply.yacc as yacc
 from lexer_defs import tokens
 import lexer_defs
 
+from parsed_tree import LEFT, RIGHT, OP, OBJ, QUAL, OBJTYPE, PROTO
+from parsed_tree import Expr, BinOp, Match, UnOp, Head, Obj, Proto
+
 precedence = (
     ('left', 'OR', 'AND'),
     ('nonassoc', 'NOT'),
     ('left', 'LSH', 'RSH'),
 )
-
-LEFT = 'left'
-RIGHT = 'right'
-OP = 'op'
-OBJ = 'obj'
-QUAL = 'qual'
-OBJTYPE = 'obj_type'
-PROTO = 'proto'
-
-class Expr(dict): pass
-
-class BinOp(Expr):
-    def __init__(self, left, right, op):
-        self[LEFT] = left
-        self[RIGHT] = right
-        self[OP] = op
-
-class Match(Expr):
-    def __init__(self, obj):
-        self[OBJ] = obj
-
-class UnOp(Expr):
-    def __init__(self, obj, op):
-        self[OBJ] = obj
-        self[OP] = op
-
-class Head(Expr):
-    def __init__(self, qual):
-        self[QUAL] = qual
-
-class Obj(Expr):
-    def __init__(self, obj, obj_type=None):
-        self[OBJ] = obj
-        self[OBJTYPE] = obj_type
-
-class Proto(Expr):
-    def __init__(self, proto):
-        self[PROTO] = proto
-
 
 def p_binary_operators(p):
     '''expression : expression AND expression
