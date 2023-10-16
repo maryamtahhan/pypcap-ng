@@ -16,7 +16,7 @@ import ply.yacc as yacc
 from lexer_defs import tokens
 import lexer_defs
 
-from parsed_tree import LEFT, RIGHT, OP, OBJ, QUAL, OBJTYPE, PROTO
+from parsed_tree import LEFT, RIGHT, OP, OBJ, QUALS, OBJTYPE, PROTO
 from parsed_tree import Expr, BinOp, Match, UnOp, Head, Obj, Proto
 
 precedence = (
@@ -54,7 +54,8 @@ def p_rterm(p):
                 | other
     '''
     if len(p) == 3:
-        p[0] = Obj(p[2], p[1])
+        p[2].quals(p[1].quals())
+        p[0] = p[2]
     else:
         p[0] = p[1]
 
@@ -133,8 +134,7 @@ def p_dqual(p):
     p[0] = p[1]
 
 def p_other(p):
-    '''other    : pname TK_BROADCAST
-                | pname TK_MULTICAST
+    '''other    : bmcast
                 | LESS NUM
                 | GREATER NUM
                 | INBOUND
@@ -151,9 +151,16 @@ def p_other(p):
                 | GENEVE
     '''
     if len(p) == 2:
-        p[0] = Obj(None, obj_type=p[1])
+        p[0] = Obj(None, quals=[p[1]])
     else:
-        p[0] = Obj(p[2], obj_type=p[1])
+        p[0] = Obj(int(p[2]), quals=[p[1]], objtype='NUM')
+
+def p_bmcast(p):
+    '''bmcast   : pname TK_BROADCAST
+                | pname TK_MULTICAST
+    '''
+    p[0] = Obj(None, quals=[p[1], p[2]])
+    
 
 def p_aqual(p):
     '''aqual : HOST
@@ -165,16 +172,56 @@ def p_aqual(p):
     p[0] = p[1]
 
 def p_id(p):
-    '''id : NUM
-          | ADDR_V4
-          | ADDR_V6
-          | STRING_LITERAL
-          | NET_V4
-          | NET_V6
+    '''id : num
+          | addr
+          | hostname
+          | net
     '''
-    p[0] = Obj(p[1])
+    p[0] = p[1]
 
-    
+def p_num(p):
+    '''num : NUM 
+    '''
+    p[0] = Obj(int(p[1]), objtype='NUM')
+
+def p_addr(p):
+    '''addr : addr4
+            | addr6
+    '''
+    p[0] = p[1]
+
+def p_addr4(p):
+    '''addr4 : ADDR_V4
+    '''
+    p[0] = Obj(p[1], objtype='ADDR_V4')
+
+def p_addr6(p):
+    '''addr6 : ADDR_V6
+    '''
+    p[0] = Obj(p[1], objtype='ADDR_V6')
+
+def p_net(p):
+    '''net  : net4
+            | net6
+    '''
+    p[0] = p[1]
+
+def p_net4(p):
+    '''net4 : NET_V4
+    '''
+    p[0] = Obj(p[1], objtype='NET_V4')
+
+def p_net6(p):
+    '''net6 : NET_V6
+    '''
+    p[0] = Obj(p[1], objtype='NET_V6')
+
+def p_hostname(p):
+    '''hostname : STRING_LITERAL
+    '''
+    p[0] = Obj(p[1], objtype='STRING_LITERAL')
+
+
 lexer = lex.lex(module=lexer_defs)
 PARSER = yacc.yacc()
 
