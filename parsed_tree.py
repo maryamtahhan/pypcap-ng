@@ -26,25 +26,33 @@ PROTO = 'proto'
 # properties that should be serialized become members of the dict, 
 # properties that should not be serialized will be just properties.
 
-class Expr(dict): pass
+class Expr(dict): 
+    '''Parsed expression and associated code.
+    '''
+    def __init__(self, compiled=None):
+        self.code = compiled
 
 class BinOp(Expr):
     def __init__(self, left, right, op):
+        super().__init__(self)
         self[LEFT] = left
         self[RIGHT] = right
         self[OP] = op
 
 class Match(Expr):
     def __init__(self, obj):
+        super().__init__(self)
         self[OBJ] = obj
 
 class UnOp(Expr):
     def __init__(self, obj, op):
+        super().__init__(self)
         self[OBJ] = obj
         self[OP] = op
 
 class Obj(Expr):
     def __init__(self, obj, objtype=None, quals=[]):
+        super().__init__(self)
         self[OBJ] = obj
         self[OBJTYPE] = objtype
         self[QUALS] = quals
