@@ -8,10 +8,33 @@ Compiler backends.
 # Copyright (c) 2023 Cambridge Greys Ltd <anton.ivanov@cambridgegreys.com>
 #
 
+from struct import Struct
+import re
+import parser
+from parsed_tree import LEFT, RIGHT, OP, OBJ, QUALS, OBJTYPE, PROTO
+
 # SYMBOLIC REGISTER NAMES
 RET = 'RET' # AX in (c|e)BPF
 
 INS_PACK = Struct("=HBBI")
+
+IPV4_REGEXP = re.compile("(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})")
+
+def IPv4toWord(ipv4):
+    match = IPV4_REGEXP.match(ipv4)
+    if match is not None:
+        scale = 24
+        total = 0
+        for index in range(1,4):
+            nibble = int(match.group(index))
+            if nibble > 256 or nibble < 0:
+                raise TypeError("Invalid IP address")
+            total += nibble << scale
+            scale -= 8
+        return total
+    raise TypeError("Invalid IP address")
+            
+            
 
 class cBPFIns(dict):
     def __init__(self, code, jt, jf, k):
@@ -31,166 +54,216 @@ class cBPFIns(dict):
 SIZE_MODS = {4 : "", 2 : "h", 1 : "b"}
 FORMATS = [
     "x/%x",             # register x
-    "[{}]",             # offset k in the packet
-    "[x + {}]",         # offset k + x in the packet 
-    "M[k]",             # offset k in M
-    "#{}",               # k literal
-    "4*([{}]&0xf)",     # Lower nibble * 4 at byte offset k in the packet ???
-    "{}",               # Label
-    "#{} {} {} ",       # #k, jt, jf
+    "[{:04X}]",             # offset k in the packet
+    "[x + {:04X}]",         # offset k + x in the packet 
+    "M[{:04X}]",             # offset k in M
+    "#{:04X}",              # k literal
+    "4*([{:04X}]&0xf)",     # Lower nibble * 4 at byte offset k in the packet ???
+    "{:04X}",               # Label
+    "#{:04X} {} {} ",       # #k, jt, jf
     "x/%x {} {}",       # x, jt, jf
-    "#{} {}",           # #k, jt
+    "#{:04X} {}",           # #k, jt
     "x/%x {}",          # x, jt
     "a/%a",             # accumulator
-    "{}"                # extensions
+    "{:04X}"                # extensions
 ]
 
 class AbstractCode(dict):
     '''Generic code class (bpf, instructions to flower, instructions
     to hardware, etc.
     '''
-    def __init__(self, code="", reg="", size=4, mode=None):
-        self.code = code + register
+    def __init__(self, code="", reg="", size=4, mode=None, label=None):
+        self.code = code + reg
         self.code += SIZE_MODS[size]
         self.mode = mode
         self.values = []
+        self.label = label
 
     def __repr__(self):
-        if mode is not None:
-            return self.code + "\t" + FORMATS[self.mode].format(*self.values) 
+        res = ""
+        if self.label is not None:
+            res += "{}: ".format(self.label)
+            
+        if self.mode is not None:
+            res += self.code + "\t" + FORMATS[self.mode].format(*self.values) 
         else:
-            return self.code
+            res += self.code
+        return res
 
     def check_mode(self, mode, mask):
         if not mode in mask:
-            raise TypeError("Invalid Addressing mode")
+            raise TypeError("Invalid Addressing mode {} not {} in ".format(mode, mask))
+
+    def set_values(self, values):
+    
+        if isinstance(values, list):
+            self.values = values
+        else:
+            self.values.append(values)
 
 class LD(AbstractCode):
     # Load into a register
-    def __init__(self, values, reg="", size=4, mode=None):
+    def __init__(self, values, reg="", size=4, mode=None, label=None):
         if reg == "x":
-            check_mode(mode, [1, 2, 3, 4, 12])
+            self.check_mode(mode, [3, 4, 5, 12])
         else:
-            check_mode(mode, [3, 4, 5, 12])
-        super().__init__(code="ld", reg=reg, size=size, mode=mode)
-        self.values = values
+            self.check_mode(mode, [1, 2, 3, 4, 12])
+        super().__init__(code="ld", reg=reg, size=size, mode=mode, label=label)
+        self.set_values(values)
 
 class ST(AbstractCode):
-    def __init__(self, values, reg="", size=4, mode=0):
-        super().__init__(code="st", reg=reg, size=size, mode=3)
-        self.values = values
+    def __init__(self, values, reg="", size=4, mode=0, label=None):
+        super().__init__(code="st", reg=reg, size=size, mode=mode, label=label)
+        self.set_values(values)
 
 class JMP(AbstractCode):
-    def __init__(self, values):
-        super().__init__(code="jmp", mode=6)
-        self.values = values
+    def __init__(self, values, label=None):
+        super().__init__(code="jmp", mode=6, label=label)
+        self.set_values(values)
         
 class JA(AbstractCode):
-    def __init__(self, values):
-        super().__init__(code="ja", mode=6)
-        self.values = values
+    def __init__(self, values, label=None):
+        super().__init__(code="ja", mode=6, label=label)
+        self.set_values(values)
 
 class CondJump(AbstractCode):
-    def __init__(self, values, code="jeq", mode=None):
+    def __init__(self, values, code="jeq", mode=None, label=None):
         if code in ["jeq", "jgt", "jge", "jset"]:
-            check_mode(mode, [7, 8, 9, 10])
+            self.check_mode(mode, [7, 8, 9, 10])
         else:
-            check_mode(mode, [9, 10])
-        super().__init__(code=code, mode=mode)
-        self.values = values
+            self.check_mode(mode, [9, 10])
+        super().__init__(code=code, mode=mode, label=label)
+        self.set_values(values)
         
 class JEQ(CondJump):
-    def __init__(self, values, mode=None):
-        super().__init__(values, code="jeq", mode=mode)
+    def __init__(self, values, mode=None, label=None):
+        super().__init__(values, code="jeq", mode=mode, label=label)
         
 class JNEQ(CondJump):
-    def __init__(self, values, mode=None):
-        super().__init__(vlues, code="jneq", mode=mode)
+    def __init__(self, values, mode=None, label=None):
+        super().__init__(vlues, code="jneq", mode=mode, label=label)
 
 class JNE(CondJump):
-    def __init__(self, values, mode=None):
-        super().__init__(values, code="jne", mode=mode)
+    def __init__(self, values, mode=None, label=None):
+        super().__init__(values, code="jne", mode=mode, label=label)
 
 class JLT(CondJump):
-    def __init__(self, values, mode=None):
-        super().__init__(values, code="jlt", mode=mode)
+    def __init__(self, values, mode=None, label=None):
+        super().__init__(values, code="jlt", mode=mode, label=label)
 
 class JLE(CondJump):
-    def __init__(self, values, mode=None):
-        super().__init__(values, code="jlt", mode=mode)
+    def __init__(self, values, mode=None, label=None):
+        super().__init__(values, code="jlt", mode=mode, label=label)
 
 class JGT(CondJump):
-    def __init__(self, values, mode=None):
-        super().__init__(values, code="jgt", mode=mode)
+    def __init__(self, values, mode=None, label=None):
+        super().__init__(values, code="jgt", mode=mode, label=label)
 
 class JGE(CondJump):
-    def __init__(self, values, mode=None):
-        super().__init__(values, code="jge", mode=mode)a
+    def __init__(self, values, mode=None, label=None):
+        super().__init__(values, code="jge", mode=mode, label=label)
 
 class JSET(CondJump):
-    def __init__(self, values, mode=None):
-        super().__init__(values, code="jset", mode=mode)
+    def __init__(self, values, mode=None, label=None):
+        super().__init__(values, code="jset", mode=mode, label=label)
 
 class Arithmetics(AbstractCode):
-    def __init__(self, values, code=None, mode=None):
-        check_mode(mode, [0, 4])
-        super().__init__(code=code, mode=mode)
-        self.values = values
+    def __init__(self, values, code=None, mode=None, label=None):
+        self.check_mode(mode, [0, 4])
+        super().__init__(code=code, mode=mode, label=label)
+        self.set_values(values)
 
 class ADD(Arithmetics):
-    def __init__(self, values, mode=None):
-        super().__init__(values, code="add", mode=mode)
+    def __init__(self, values, mode=None, label=None):
+        super().__init__(values, code="add", mode=mode, label=label)
 
 class SUB(Arithmetics):
-    def __init__(self, values, mode=None):
-        super().__init__(values, code="sub", mode=mode)
+    def __init__(self, values, mode=None, label=None):
+        super().__init__(values, code="sub", mode=mode, label=label)
 
 class MUL(Arithmetics):
-    def __init__(self, values, mode=None):
-        super().__init__(values, code="mul", mode=mode)
+    def __init__(self, values, mode=None, label=None):
+        super().__init__(values, code="mul", mode=mode, label=label)
 
 class DIV(Arithmetics):
-    def __init__(self, values, mode=None):
-        super().__init__(values, code="div", mode=mode)
+    def __init__(self, values, mode=None, label=None):
+        super().__init__(values, code="div", mode=mode, label=label)
 
 class MOD(Arithmetics):
-    def __init__(self, values, mode=None):
-        super().__init__(values, code="mod", mode=mode)
+    def __init__(self, values, mode=None, label=None):
+        super().__init__(values, code="mod", mode=mode, label=label)
 
 class AND(Arithmetics):
-    def __init__(self, values, mode=None):
-        super().__init__(values, code="and", mode=mode)
+    def __init__(self, values, mode=None, label=None):
+        super().__init__(values, code="and", mode=mode, label=label)
 
 class OR(Arithmetics):
-    def __init__(self, values, mode=None):
-        super().__init__(values, code="or", mode=mode)
+    def __init__(self, values, mode=None, label=None):
+        super().__init__(values, code="or", mode=mode, label=label)
 
 class XOR(Arithmetics):
-    def __init__(self, values, mode=None):
-        super().__init__(values, code="xor", mode=mode)
+    def __init__(self, values, mode=None, label=None):
+        super().__init__(values, code="xor", mode=mode, label=label)
 
 class LSH(Arithmetics):
-    def __init__(self, values, mode=None):
-        super().__init__(values, code="lsh", mode=mode)
+    def __init__(self, values, mode=None, label=None):
+        super().__init__(values, code="lsh", mode=mode, label=label)
 
 class RSH(Arithmetics):
-    def __init__(self, values, mode=None):
-        super().__init__(values, code="rsh", mode=mode)
+    def __init__(self, values, mode=None, label=None):
+        super().__init__(values, code="rsh", mode=mode, label=label)
 
 class NEG(AbstractCode):
-    def __init__(self):
-        super().__init__(None, code="neg")
+    def __init__(self, label=None):
+        super().__init__(None, code="neg", label=label)
 
 class TAX(AbstractCode):
-    def __init__(self):
-        super().__init__(None, code="tax")
+    def __init__(self, label=None):
+        super().__init__(None, code="tax", label=label)
 
 class TXA(AbstractCode):
-    def __init__(self):
-        super().__init__(None, code="txa")
+    def __init__(self, label=None):
+        super().__init__(None, code="txa", label=label)
 
 class RET(AbstractCode):
-    def __init__(self, values, mode=4):
-        check_mode(mode, [4, 11])
-        super().__init__(None, code="RET")
+    def __init__(self, values, mode=4, label=None):
+        self.check_mode(mode, [4, 11])
+        super().__init__(code="ret", mode=mode, label=label)
+        self.set_values(values)
+
+class Match(AbstractCode):
+    '''Class describing a single filter match entry
+    args: match_obj from parsing and match_location - 
+    offset into the packet
+    '''
+    def __init__(self, match_obj, match_loc):
+        self.match_obj = match_obj
+        self.match_loc = match_loc
+        self.code = []
+
+    def __repr__(self):
+        result = ""
+        for item in self.code:
+            result += "{}\n".format(item)
+        return result
+
+V4_NET_REGEXP = re.compile("(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\/(\d{1,2})")
+
+
+class IPv4Match(Match):
+    '''IPv4 matcher'''
+    def __init__(self, match_obj, match_loc):
+        super().__init__(match_obj, match_loc)
+        self.code.append(
+            LD(self.match_loc, size=4, mode=3)
+        )
+        addr = V4_NET_REGEXP.match(match_obj[OBJ])
+        if addr is not None:
+            netmask = 0xffffffff ^ (0xffffffff >> int(addr.group(2)))
+            self.code.append(AND(netmask, mode=4))
+            self.code.append(JEQ([IPv4toWord(addr.group(1)),"ok"], mode=9))
+        else:
+            self.code.append(JEQ([IPv4toWord(match_obj[OBJ]),"ok"], mode=9))
+        self.code.append(RET(0, mode=4))
+        self.code.append(RET(-1, mode=4, label="ok"))
 
