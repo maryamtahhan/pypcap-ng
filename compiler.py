@@ -80,9 +80,11 @@ class AbstractCode(dict):
         self.label = label
 
     def __repr__(self):
-        res = ""
+        res = "\t"
         if self.label is not None:
-            res += "{}: ".format(self.label)
+            res = "{}:\t".format(self.label)
+        
+    
             
         if self.mode is not None:
             res += self.code + "\t" + FORMATS[self.mode].format(*self.values) 
@@ -90,16 +92,23 @@ class AbstractCode(dict):
             res += self.code
         return res
 
-    def check_mode(self, mode, mask):
+    def check_mode(self, mode, mask=None):
+        '''Verify mode'''
         if not mode in mask:
             raise TypeError("Invalid Addressing mode {} not {} in ".format(mode, mask))
 
     def set_values(self, values):
+        '''Values setter'''
     
         if isinstance(values, list):
             self.values = values
         else:
             self.values.append(values)
+
+    def resolve_references(self):
+        '''Resolve jump/load/etc refs'''
+        pass
+        
 
 class LD(AbstractCode):
     # Load into a register
@@ -250,7 +259,7 @@ class Match(AbstractCode):
 V4_NET_REGEXP = re.compile("(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\/(\d{1,2})")
 
 
-class IPv4Match(Match):
+class MatchIPv4(Match):
     '''IPv4 matcher'''
     def __init__(self, match_obj, match_loc):
         super().__init__(match_obj, match_loc)
@@ -261,9 +270,26 @@ class IPv4Match(Match):
         if addr is not None:
             netmask = 0xffffffff ^ (0xffffffff >> int(addr.group(2)))
             self.code.append(AND(netmask, mode=4))
-            self.code.append(JEQ([IPv4toWord(addr.group(1)),"ok"], mode=9))
+            self.code.append(JEQ([IPv4toWord(addr.group(1)), "next"], mode=9))
         else:
-            self.code.append(JEQ([IPv4toWord(match_obj[OBJ]),"ok"], mode=9))
+            self.code.append(JEQ([IPv4toWord(match_obj[OBJ]), "next"], mode=9))
         self.code.append(RET(0, mode=4))
-        self.code.append(RET(-1, mode=4, label="ok"))
 
+class MatchL2Proto(Match):
+    def __init__(self, l2proto, offset=12):
+        super()._init(l2proto, offset)
+        self.code.append(
+            LD(self.match_loc, size=4, mode=3),
+            JEQ([l2proto], "next" ,mode=9),
+            RET(0, mode=4)
+        )
+
+class MatchSRCv4(MatchIPv4):
+    '''IPv4 SRC Matcher'''
+    def __init__(self, match_obj, l2_hdr_size):
+        super_init(self, match_obj, l2_hdr_size + 12)
+
+class MatchDSTv4(MatchIPv4):
+    '''IPv4 DST Matcher'''
+    def __init__(self, match_obj, l2_hdr_size):
+        super_init(self, match_obj, l2_hdr_size + 16)
