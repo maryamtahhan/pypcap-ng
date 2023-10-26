@@ -32,12 +32,31 @@ class Expr(dict):
     def __init__(self, compiled=None):
         self.code = compiled
 
+    def quals(self, new_quals=None):
+        '''Set/reset qualifiers'''
+
+        if new_quals is not None:
+            self[QUALS] = new_quals
+        return self[QUALS]
+
 class BinOp(Expr):
     def __init__(self, left, right, op):
         super().__init__(self)
         self[LEFT] = left
         self[RIGHT] = right
         self[OP] = op
+
+    def quals(self, new_quals=None):
+        '''Set/reset qualifiers'''
+
+        if new_quals is not None:
+            if (isinstance(self[LEFT], Expr)):
+                self[LEFT].quals(new_quals)
+            if (isinstance(self[RIGHT], Expr)):
+                self[RIGHT].quals(new_quals)
+        
+        return None
+
 
 class Match(Expr):
     def __init__(self, obj):
@@ -57,13 +76,7 @@ class Obj(Expr):
         self[OBJTYPE] = objtype
         self[QUALS] = quals
 
-    def quals(self, new_quals=None):
-        '''Set/reset qualifiers'''
-
-        if new_quals is not None:
-            self[QUALS] = new_quals
-        return self[QUALS]
-        
+       
 class Head(Obj):
     def __init__(self, quals):
         super().__init__(self, None, quals=quals)
