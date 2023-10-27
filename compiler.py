@@ -84,7 +84,8 @@ def resolve_label(values, compiler_state): pass
 
 SIZE_MODS = [None, "b", "h", None, ""]
 
-NEXT_FRAG = "__next_frag"
+NEXT_MATCH = "__next_match"
+LAST_INSN = "__last_insn"
 
 class AbstractCode(dict):
     '''Generic code class (bpf, instructions to flower, instructions
@@ -95,20 +96,38 @@ class AbstractCode(dict):
         self.code += SIZE_MODS[size]
         self.mode = mode
         self.values = []
-        self.label = label
+        self.labels = []
+        if label is not None:
+            if isinstance(label, list):
+                self.labels.extend(label)
+            else:
+                self.labels = [label]
         self.loc = COMPILER_STATE.get_loc()
 
     def __repr__(self):
 
-        res = "\t"
-        if self.label is not None:
-            res = "{}:\t".format(self.label)
+        res = ""
+        for label in self.labels:
+            res += "{}:\n".format(label)
 
-        res += self.code
+        res += "\t" + self.code
 
         if self.mode is not None:
             res += "\t" + FORMATS[self.mode].format(*self.values) 
         return res
+
+    def has_label(self, label):
+        return label in self.labels
+
+    def add_label(self, label):
+        if not label in self.labels:
+            self.labels.append(label)
+
+    def replace_label(self, label, newlabel):
+        for index in range(0, len(self.labels)):
+            if label == self.labels[index]:
+                self.labels[index] = label
+                break
 
     def check_mode(self, mode, mask=None):
         '''Verify mode'''
@@ -123,7 +142,7 @@ class AbstractCode(dict):
         else:
             self.values.append(values)
 
-    def resolve_frag_refs(self, label):
+    def resolve_refs(self, old_label, new_label):
         '''Resolve jump/load/etc refs'''
         pass
 
@@ -135,15 +154,6 @@ class AbstractCode(dict):
         "Return loc"
         return self.loc
 
-class Jump(AbstractCode):
-    def init(self, code="", reg="", size=4, mode=None, label=None):
-        super().__init__(code, reg, size, mode, label)
-
-    def resolve_frag_refs(self, label):
-        '''Resolve jump to next frag references'''
-        for index in range(0, len(self.values)):
-            if self.values[index] == NEXT_FRAG:
-                self.values[index] = label 
 
 class LD(AbstractCode):
     # Load into a register
@@ -159,6 +169,16 @@ class ST(AbstractCode):
     def __init__(self, values, reg="", size=4, mode=0, label=None):
         super().__init__(code="st", reg=reg, size=size, mode=mode, label=label)
         self.set_values(values)
+
+class Jump(AbstractCode):
+    def __init__(self, code=None, values=None, mode=6, label=None):
+        super().__init__(code=code, mode=mode, label=label)
+        self.set_values(values)
+
+    def resolve_refs(self, old_label, new_label):
+        for index in range(0, len(self.values)):
+            if self.values[index] == old_label:
+                self.values[index] = new_label
 
 class JMP(Jump):
     def __init__(self, values, label=None):
@@ -284,6 +304,7 @@ class Match(AbstractCode):
         self.match_obj = match_obj
         self.match_loc = match_loc
         self.code = []
+        self.marked = False
 
     def __repr__(self):
         result = ""
@@ -291,12 +312,13 @@ class Match(AbstractCode):
             result += "{}\n".format(item)
         return result
 
-    def resolve_frag_refs(self, label):
+    def resolve_refs(self, old_label, new_label):
         '''Resolve references to "jump to next frag"'''
         for insn in self.code:
-            insn.resolve_frag_refs(label)
+            insn.resolve_refs(old_label, new_label)
 
     def get_code(self):
+        self.code[0].add_label("__match__{}".format(self.code[0].get_loc()))
         return self.code
 
 V4_NET_REGEXP = re.compile("(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\/(\d{1,2})")
@@ -320,9 +342,9 @@ class MatchIPv4(Match):
         if addr is not None:
             netmask = 0xffffffff ^ (0xffffffff >> int(addr.group(2)))
             self.code.append(AND(netmask, mode=4))
-            self.code.append(JEQ([IPv4toWord(addr.group(1)), NEXT_FRAG], mode=9))
+            self.code.append(JEQ([IPv4toWord(addr.group(1)), NEXT_MATCH], mode=9))
         else:
-            self.code.append(JEQ([IPv4toWord(match_obj[OBJ]), NEXT_FRAG], mode=9))
+            self.code.append(JEQ([IPv4toWord(match_obj[OBJ]), NEXT_MATCH], mode=9))
         self.code.append(RET(0, mode=4))
 
 class MatchL2Proto(Match):
@@ -330,7 +352,7 @@ class MatchL2Proto(Match):
         super().__init__(l2proto, offset)
         self.code.extend([
             LD(self.match_loc, size=4, mode=1),
-            JEQ([ETH_PROTOS[l2proto], NEXT_FRAG], mode=9),
+            JEQ([ETH_PROTOS[l2proto], NEXT_MATCH], mode=9),
             RET(0, mode=4)
         ])
 
@@ -339,9 +361,15 @@ class MatchL3Proto(Match):
         super().__init__(l3proto, offset)
         self.code.extend([
             LD(self.match_loc, size=1, mode=1),
-            JEQ([IP_PROTOS[l3proto], NEXT_FRAG], mode=9),
+            JEQ([IP_PROTOS[l3proto], NEXT_MATCH], mode=9),
             RET(0, mode=4)
         ])
+
+class Success(Match):
+    def __init__(self):
+        super().__init__(None, None)
+        self.code.extend([RET(0xFFFF, label=LAST_INSN)])
+        
 
 class AbstractProgram():
     def __init__(self, frags=[], label=None):
@@ -351,26 +379,45 @@ class AbstractProgram():
 
     def get_code(self):
         compiled = []
-        for frag in frags:
+        for frag in self.frags:
             compiled.extend(frag.get_code())
         return compiled
 
     def resolve_frag_refs(self, old_loc_label=None):
         '''First pass in resolving references - insert
            internal labels to next code fragment where needed'''
-        if self.frag_refs_resolved:
-            return
 
-        for index in range(len(self.frags) - 1, 0 , -1):
-            frag = self.frags[index]
-            loc_label = "__frag__{}".format(frag.get_code()[0].get_loc())
-            if isinstance(frag, AbstractProgram):
-                old_loc_label = frag.resolve_frag_refs(loc_label)
-            else:
-                for insn in frag.get_code():
-                    insn.resolve_frag_refs(old_loc_label)
-                old_loc_label = frag.get_code()[0].get_loc()
-        self.frag_refs_resolved = True
+        code = self.get_code()
+
+        if not code[-1].has_label(LAST_INSN):
+            raise ValueError("Invalid Program - no last instruction marker")
+        next_frag = LAST_INSN
+        for index in range(len(code) -1 , -1, -1):
+            item = code[index]
+            item.resolve_refs(NEXT_MATCH, next_frag)
+            for label in item.labels:
+                if "__match__" in label:
+                    next_frag = label
+
+    def resolve_refs(self):
+        '''Second pass'''
+        code = self.get_code()
+
+        labels = {}
+
+        for index in range(0, len(code)):
+            for label in code[index].labels:
+                labels[label] = index
+
+        for index in range(0, len(code)):
+            for key, value in labels.items():
+                code[index].resolve_refs(key, value)
+
+        for index in range(0, len(code)):
+            for label in code[index].labels:
+                code[index].labels = []
+                
+
 
     def __repr__(self):
         '''Representation'''
@@ -386,7 +433,7 @@ class ProgIP(AbstractProgram):
 class ProgIPv4(AbstractProgram):
     def __init__(self, match_obj, offset=None, location=None):
         if offset is None:
-            super().__init__(frags=[ProgIP(), MatchIPv4(match_obj, location=location)])
+            super().__init__(frags=[ProgIP(), MatchIPv4(match_obj, location=location), Success()])
         else:
-            super().__init__(frags=[ProgIP(), MatchIPv4(match_obj, offset, location)])
+            super().__init__(frags=[ProgIP(), MatchIPv4(match_obj, offset, location), Success()])
             
