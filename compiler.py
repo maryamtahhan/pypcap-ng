@@ -64,18 +64,18 @@ class cBPFIns(dict):
 
 FORMATS = [
     "x/%x",                 # 0  register x
-    "[{:04X}]",             # 1  offset k in the packet
-    "[x + {:04X}]",         # 2  offset k + x in the packet 
-    "M[{:04X}]",            # 3  offset k in M
-    "#{:04X}",              # 4  k literal
-    "4*([{:04X}]&0xf)",     # 5  Lower nibble * 4 at byte offset k in the packet ???
-    "{:04X}",               # 6  Label
-    "#{:04X} {} {} ",       # 7  #k, jt, jf
-    "x/%x {} {}",           # 8  x, jt, jf
-    "#{:04X} {}",           # 9  #k, jt
-    "x/%x {}",              # 10 x, jt
+    "[0x{:04X}]",             # 1  offset k in the packet
+    "[x + 0x{:04X}]",         # 2  offset k + x in the packet 
+    "M[0x{:04X}]",            # 3  offset k in M
+    "#0x{:04X}",              # 4  k literal
+    "4*([0x{:04X}]&0xf)",     # 5  Lower nibble * 4 at byte offset k in the packet ???
+    "0x{:04X}",               # 6  Label
+    "#0x{:04X} jt {} jf {} ",       # 7  #k, jt, jf
+    "x/%x jt {} jf {}",           # 8  x, jt, jf
+    "#0x{:04X} jt {}",           # 9  #k, jt
+    "x/%x jt {}",              # 10 x, jt
     "a/%a",                 # 11 accumulator
-    "{:04X}"                # 12 extensions
+    "0x{:04X}"                # 12 extensions
 ]
 
 def resolve_addr(values): pass
@@ -86,6 +86,8 @@ SIZE_MODS = [None, "b", "h", None, ""]
 
 NEXT_MATCH = "__next_match"
 LAST_INSN = "__last_insn"
+SUCCESS = "__success"
+FAIL = "__fail"
 
 class AbstractCode(dict):
     '''Generic code class (bpf, instructions to flower, instructions
@@ -300,9 +302,11 @@ class Match(AbstractCode):
     args: match_obj from parsing and match_location - 
     offset into the packet
     '''
-    def __init__(self, match_obj, match_loc):
+    def __init__(self, match_obj, match_loc, jf=None, jt=None):
         self.match_obj = match_obj
         self.match_loc = match_loc
+        self.jt = jt
+        self.jf = jf
         self.code = []
         self.marked = False
 
@@ -325,7 +329,7 @@ V4_NET_REGEXP = re.compile("(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\/(\d{1,2})")
 
 class MatchIPv4(Match):
     '''IPv4 matcher. '''
-    def __init__(self, match_obj, match_off=ETHER["size"], location=None):
+    def __init__(self, match_obj, jt=None, jf=None, match_off=ETHER["size"], location=None):
         addr = V4_NET_REGEXP.match(match_obj[OBJ])
         if location is None:
             for qual in match_obj[QUALS]:
@@ -334,7 +338,7 @@ class MatchIPv4(Match):
                     break
         if location is None:
             raise ValueError("Invalid address type specifier")
-        super().__init__(match_obj, location)
+        super().__init__(match_obj, location, jt, jf)
 
         self.code.append(
             LD(self.match_loc, size=4, mode=1)
@@ -342,37 +346,39 @@ class MatchIPv4(Match):
         if addr is not None:
             netmask = 0xffffffff ^ (0xffffffff >> int(addr.group(2)))
             self.code.append(AND(netmask, mode=4))
-            self.code.append(JEQ([IPv4toWord(addr.group(1)), NEXT_MATCH], mode=9))
+            self.code.append(JEQ([IPv4toWord(addr.group(1)), jt, jf], mode=7))
         else:
-            self.code.append(JEQ([IPv4toWord(match_obj[OBJ]), NEXT_MATCH], mode=9))
-        self.code.append(RET(0, mode=4))
+            self.code.append(JEQ([IPv4toWord(match_obj[OBJ]), jt, jf], mode=7))
 
 class MatchL2Proto(Match):
-    def __init__(self, l2proto, offset=ETHER["proto"]):
-        super().__init__(l2proto, offset)
+    def __init__(self, l2proto, jt=None, jf=None, offset=ETHER["proto"]):
+        super().__init__(l2proto, offset, jt, jf)
         self.code.extend([
             LD(self.match_loc, size=4, mode=1),
-            JEQ([ETH_PROTOS[l2proto], NEXT_MATCH], mode=9),
-            RET(0, mode=4)
+            JEQ([ETH_PROTOS[l2proto], jt, jf], mode=7),
         ])
 
 class MatchL3Proto(Match):
-    def __init__(self, l3proto, offset=(IP["proto"] + ETHER["size"])):
-        super().__init__(l3proto, offset)
+    def __init__(self, l3proto, jt=None, jf=None, offset=(IP["proto"] + ETHER["size"])):
+        super().__init__(l3proto, offset, jt, jf)
         self.code.extend([
             LD(self.match_loc, size=1, mode=1),
-            JEQ([IP_PROTOS[l3proto], NEXT_MATCH], mode=9),
-            RET(0, mode=4)
+            JEQ([IP_PROTOS[l3proto], jt, jf], mode=7),
         ])
 
+class Fail(Match):
+    def __init__(self):
+        super().__init__(None, None)
+        self.code.extend([RET(0, label=[LAST_INSN, FAIL])])
+        
 class Success(Match):
     def __init__(self):
         super().__init__(None, None)
-        self.code.extend([RET(0xFFFF, label=LAST_INSN)])
+        self.code.extend([RET(0xFFFF, label=SUCCESS)])
         
 
 class AbstractProgram():
-    def __init__(self, frags=[], label=None):
+    def __init__(self, jt=None, jf=None, frags=[], label=None):
         self.label = None
         self.frags = frags
         self.frag_refs_resolved = False
@@ -418,7 +424,6 @@ class AbstractProgram():
                 code[index].labels = []
                 
 
-
     def __repr__(self):
         '''Representation'''
         res = ""
@@ -427,13 +432,12 @@ class AbstractProgram():
         return res
 
 class ProgIP(AbstractProgram):
-    def __init__(self):
-        super().__init__(frags=[MatchL2Proto("ip"), MatchL3Proto("ip")])
+    def __init__(self, jt=None, jf=None):
+        super().__init__(jt=jt, jf=jf, frags=[MatchL2Proto("ip", jt=jt, jf=jf)])
 
 class ProgIPv4(AbstractProgram):
-    def __init__(self, match_obj, offset=None, location=None):
+    def __init__(self, match_obj, jt=None, jf=None, offset=None, location=None):
         if offset is None:
-            super().__init__(frags=[ProgIP(), MatchIPv4(match_obj, location=location), Success()])
+            super().__init__(frags=[ProgIP(jt=jt, jf=jf), MatchIPv4(match_obj, jt=jt, jf=jf, location=location), Success(), Fail()])
         else:
-            super().__init__(frags=[ProgIP(), MatchIPv4(match_obj, offset, location), Success()])
-            
+            super().__init__(frags=[ProgIP(jt=jt, jf=jf), MatchIPv4(match_obj, jt=jt, jf=jf, offset=offset, location=location), Success(), Fail()])
