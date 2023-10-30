@@ -12,6 +12,7 @@ from struct import Struct
 import re
 import parser
 from parsed_tree import LEFT, RIGHT, OP, OBJ, QUALS, OBJTYPE, PROTO
+from parsed_tree import Expr, BinOp, Match, UnOp, Head, Obj, Proto
 from header_constants import ETHER, IP, ETH_PROTOS, IP_PROTOS
 
 # SYMBOLIC REGISTER NAMES
@@ -127,8 +128,14 @@ class AbstractCode(dict):
 
     def replace_label(self, label, newlabel):
         for index in range(0, len(self.labels)):
-            if label == self.labels[index]:
-                self.labels[index] = label
+            if self.labels[index] == label:
+                self.labels[index] = newlabel
+                break
+
+    def replace_value(self, value, newvalue):
+        for index in range(0, len(self.values)):
+            if self.values[index] == value:
+                self.values[index] = newvalue
                 break
 
     def check_mode(self, mode, mask=None):
@@ -200,7 +207,7 @@ class CondJump(Jump):
             self.check_mode(mode, [9, 10])
         super().__init__(code=code, mode=mode, label=label)
         self.set_values(values)
-        
+
 class JEQ(CondJump):
     def __init__(self, values, mode=None, label=None):
         super().__init__(values, code="jeq", mode=mode, label=label)
@@ -330,6 +337,8 @@ V4_NET_REGEXP = re.compile("(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\/(\d{1,2})")
 class MatchIPv4(Match):
     '''IPv4 matcher. '''
     def __init__(self, match_obj, jt=None, jf=None, match_off=ETHER["size"], location=None):
+
+
         addr = V4_NET_REGEXP.match(match_obj[OBJ])
         if location is None:
             for qual in match_obj[QUALS]:
@@ -349,6 +358,12 @@ class MatchIPv4(Match):
             self.code.append(JEQ([IPv4toWord(addr.group(1)), jt, jf], mode=7))
         else:
             self.code.append(JEQ([IPv4toWord(match_obj[OBJ]), jt, jf], mode=7))
+
+    def replace_value(self, oldvalue, newvalue):
+        '''Replace values in match insns'''
+        for insn in self.code:
+            insn.replace_value(oldvalue, newvalue)
+    
 
 class MatchL2Proto(Match):
     def __init__(self, l2proto, jt=None, jf=None, offset=ETHER["proto"]):
@@ -379,7 +394,10 @@ class Success(Match):
 
 class AbstractProgram():
     def __init__(self, jt=None, jf=None, frags=[], label=None):
+
         self.label = None
+        if not isinstance(frags, list):
+            frags = [frags]
         self.frags = frags
         self.frag_refs_resolved = False
 
@@ -431,6 +449,7 @@ class AbstractProgram():
             res += "{}".format(frag)
         return res
 
+
 class ProgIP(AbstractProgram):
     def __init__(self, jt=None, jf=None):
         super().__init__(jt=jt, jf=jf, frags=[MatchL2Proto("ip", jt=jt, jf=jf)])
@@ -438,6 +457,36 @@ class ProgIP(AbstractProgram):
 class ProgIPv4(AbstractProgram):
     def __init__(self, match_obj, jt=None, jf=None, offset=None, location=None):
         if offset is None:
-            super().__init__(frags=[ProgIP(jt=jt, jf=jf), MatchIPv4(match_obj, jt=jt, jf=jf, location=location), Success(), Fail()])
+            super().__init__(frags=[ProgIP(jt=jt, jf=jf), MatchIPv4(match_obj, jt=jt, jf=jf, location=location)])
         else:
-            super().__init__(frags=[ProgIP(jt=jt, jf=jf), MatchIPv4(match_obj, jt=jt, jf=jf, offset=offset, location=location), Success(), Fail()])
+            super().__init__(frags=[ProgIP(jt=jt, jf=jf), MatchIPv4(match_obj, jt=jt, jf=jf, offset=offset, location=location)])
+
+class ProgNOT(AbstractProgram):
+    def __init__(self, frags, jt=None, jf=None):
+        super().__init__(frags=frags)
+        code = self.get_code()
+        for insn in code:
+            insn.replace_value(FAIL, SUCCESS)
+
+        lastfrag = self.frags[-1]
+
+        while not isinstance(lastfrag, Match):
+            lastfrag = lastfrag.frags[-1]
+        
+        lastfrag.replace_value(NEXT_MATCH, FAIL)
+
+
+def do_walk_tree(tree):
+    '''Walk a parser tree and invoke compiler'''
+    if isinstance(tree, UnOp):
+        return [ProgNOT(frags=do_walk_tree(tree[OBJ]))]
+    elif isinstance(tree, Obj) and \
+        (tree[OBJTYPE] == 'ADDR_V4' or tree[OBJTYPE] == 'NET_V4'):
+        return [ProgIPv4(tree, jt=NEXT_MATCH, jf=FAIL)]
+
+    return [AbstractProgram(frags=do_walk_tree(tree[OBJ]), jt=NEXT_MATCH, jf=FAIL)]
+
+def walk_tree(tree):
+    frags = do_walk_tree(tree)
+    frags.extend([Success(), Fail()])
+    return AbstractProgram(frags=frags, jt=NEXT_MATCH, jf=FAIL)
