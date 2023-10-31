@@ -523,7 +523,14 @@ def do_walk_tree(tree):
         try:
             return [AbstractProgram(frags=MatchL2Proto(tree[PROTO], jt=NEXT_MATCH, jf=FAIL), jt=NEXT_MATCH, jf=FAIL)]
         except KeyError:
-            return [AbstractProgram(frags=MatchL3Proto(tree[PROTO], jt=NEXT_MATCH, jf=FAIL), jt=NEXT_MATCH, jf=FAIL)]
+            return [
+                AbstractProgram(
+                    frags=[
+                        MatchL2Proto("ip", jt=NEXT_MATCH, jf=FAIL),
+                        MatchL3Proto(tree[PROTO], jt=NEXT_MATCH, jf=FAIL),
+                    ],
+                    jt=NEXT_MATCH, jf=FAIL
+                )]
     elif isinstance(tree, BinOp):
         if tree[OP] == "or":
            return [ProgOR(do_walk_tree(tree[LEFT]), do_walk_tree(tree[RIGHT]), jt=NEXT_MATCH, jf=FAIL)]
