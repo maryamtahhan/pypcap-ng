@@ -84,6 +84,7 @@ class Head(Obj):
 class Proto(Expr):
     def __init__(self, proto):
         self[PROTO] = proto
+        self[OBJTYPE] = "PROTO"
 
 def serialize(tree):
     '''Serialize an object tree in a human readable form'''

@@ -476,13 +476,58 @@ class ProgNOT(AbstractProgram):
         lastfrag.replace_value(NEXT_MATCH, FAIL)
 
 
+class ProgOR(AbstractProgram):
+    def __init__(self, left, right, jt=None, jf=None):
+        code = []
+        for item in right:
+            code.extend(item.get_code())
+        or_label = "__or_label_{}".format(code[0].get_loc())
+        code[0].add_label(or_label)
+        code = []
+        for item in left:
+            code.extend(item.get_code())
+        for insn in code:
+            insn.replace_value(FAIL, or_label)
+
+        frag = left[-1]
+        while not isinstance(frag, Match):
+            frag = frag.frags[-1]
+        for insn in frag.get_code():
+            insn.replace_value(NEXT_MATCH, SUCCESS)
+        
+        super().__init__(frags=left+right)
+
+class ProgAND(AbstractProgram):
+    def __init__(self, left, right, jt=None, jf=None):
+        code = []
+        for item in right:
+            code.extend(item.get_code())
+        and_label = "__and_label_{}".format(code[0].get_loc())
+        code[0].add_label(and_label)
+        code = []
+        for item in left:
+            code.extend(item.get_code())
+        for insn in code:
+            insn.replace_value(SUCCESS, and_label)
+        super().__init__(frags=left+right, jt=jt, jf=jf)
+
+
 def do_walk_tree(tree):
     '''Walk a parser tree and invoke compiler'''
     if isinstance(tree, UnOp):
         return [ProgNOT(frags=do_walk_tree(tree[OBJ]))]
-    elif isinstance(tree, Obj) and \
-        (tree[OBJTYPE] == 'ADDR_V4' or tree[OBJTYPE] == 'NET_V4'):
-        return [ProgIPv4(tree, jt=NEXT_MATCH, jf=FAIL)]
+    elif isinstance(tree, Obj):
+        if (tree[OBJTYPE] == 'ADDR_V4' or tree[OBJTYPE] == 'NET_V4'):
+            return [ProgIPv4(tree, jt=NEXT_MATCH, jf=FAIL)]
+    elif isinstance(tree, Proto):
+        try:
+            return [AbstractProgram(frags=MatchL2Proto(tree[PROTO], jt=NEXT_MATCH, jf=FAIL), jt=NEXT_MATCH, jf=FAIL)]
+        except KeyError:
+            return [AbstractProgram(frags=MatchL3Proto(tree[PROTO], jt=NEXT_MATCH, jf=FAIL), jt=NEXT_MATCH, jf=FAIL)]
+    elif isinstance(tree, BinOp):
+        if tree[OP] == "or":
+           return [ProgOR(do_walk_tree(tree[LEFT]), do_walk_tree(tree[RIGHT]), jt=NEXT_MATCH, jf=FAIL)]
+        return [ProgAND(do_walk_tree(tree[LEFT]), do_walk_tree(tree[RIGHT]), jt=NEXT_MATCH, jf=FAIL)]
 
     return [AbstractProgram(frags=do_walk_tree(tree[OBJ]), jt=NEXT_MATCH, jf=FAIL)]
 
