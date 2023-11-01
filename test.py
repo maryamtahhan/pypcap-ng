@@ -30,7 +30,7 @@ def main():
 
     print(serialize(parsed))
 
-    compiled = compiler.walk_tree(parsed)
+    compiled = compiler.walk_tree_cbpf(parsed)
 
     compiled.resolve_frag_refs()
     compiled.resolve_refs()
