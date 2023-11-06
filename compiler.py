@@ -26,7 +26,7 @@ class CompilerState():
     '''
     def __init__(self):
         self.loc = 0
-        self.offset = 0
+        self.extra_offset = 0
 
     def get_loc(self):
         '''Instruction ID'''
@@ -35,7 +35,12 @@ class CompilerState():
 
     def get_offset(self):
         '''Additional packet offset where applicable'''
-        return self.offset
+        return self.extra_offset
+
+    def add_offset(self, arg):
+        '''Add extra offset'''
+        self.extra_offset += arg
+
 
 # Global compiler state
 
@@ -78,6 +83,7 @@ NEXT_MATCH = "__next_match"
 LAST_INSN = "__last_insn"
 SUCCESS = "__success"
 FAIL = "__fail"
+PARENT_NEXT = "__parent_next"
 
 class AbstractCode(dict):
     '''Generic code class (bpf, instructions to flower, instructions
@@ -334,18 +340,29 @@ class RET(CBPFCode):
         super().__init__(code="ret", mode=mode, label=label)
         self.set_values(values)
 
-class Match(CBPFCode):
+
+#### Matchers
+
+
+class Match(AbstractCode):
     '''Class describing a single filter match entry
        args: match_obj from parsing and match_location - 
        offset into the packet
     '''
-    def __init__(self, match_obj, match_loc, jf=None, jt=None):
-        self.match_obj = match_obj
-        self.match_loc = match_loc
+    def __init__(self, match_obj, match_loc, jt=NEXT_MATCH,
+                 jf=FAIL, parent=None):
+
+        super().__init__()
         self.jt = jt
         self.jf = jf
         self.code = []
         self.marked = False
+        self.compiled = False
+        self.start_label = "__match__start_{}".format(self.loc)
+        self.end_label = "__match__end_{}".format(self.loc)
+        self.match_obj = match_obj
+        self.match_loc = match_loc
+        self.parent = parent
 
     def __repr__(self):
         '''Printable form - just print the instructions'''
@@ -362,79 +379,151 @@ class Match(CBPFCode):
     def get_code(self):
         '''Return the code corresponding to this match expression'''
         # If there is no label marking this match expression, add it
-        self.code[0].add_label("__match__{}".format(self.code[0].get_loc()))
         return self.code
 
-    def replace_value(self, oldvalue, newvalue):
+    def replace_value(self, oldvalue, newvalue, index=None):
         '''Replace values in match insns'''
         for insn in self.code:
             insn.replace_value(oldvalue, newvalue)
- 
+
+    def set_jt(self, jt, last_frag=False):
+        '''Set jump target if this match is True'''
+        self.jt = jt
+        
+    def set_jf(self, jf, last_frag=False):
+        '''Set jump target if this match is False'''
+        self.jf = jf
+
+    def set_parent(self):
+        pass
+
+    def compile(self):
+        '''Compile the code'''
+        self.compiled = True
+        self.update_labels()
+
+    def update_labels(self):
+        if self.compiled:
+            self.code[0].add_label(self.start_label)
+            self.code[-1].add_label(self.end_label)
+
+    def get_end_label(self):
+        return self.end_label
+
+    def get_start_label(self):
+        return self.start_label
+
+    def get_next_match(self):
+        if self.parent is not None:
+            return parent.get_next_match(self)
+
 V4_NET_REGEXP = re.compile("(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\/(\d{1,2})")
 
 class MatchIPv4(Match):
     '''IPv4 address matcher.'''
-    def __init__(self, match_obj, jt=None, jf=None, match_off=ETHER["size"], location=None):
+    def __init__(self, match_obj, jt=NEXT_MATCH, jf=FAIL, match_off=ETHER["size"]):
 
-        addr = V4_NET_REGEXP.match(match_obj[OBJ])
-        if location is None:
-            for qual in match_obj[QUALS]:
-                location = match_off + IP.get(qual)
-                if location is not None:
-                    break
+        super().__init__(match_obj, match_off, jt, jf)
+        
+
+    def compile(self):
+        '''Generate the actual code for the match'''
+
+        addr = V4_NET_REGEXP.match(self.match_obj[OBJ])
+        location = None
+        for qual in self.match_obj[QUALS]:
+            try:
+                location = self.match_loc + IP[qual]
+            except KeyError:
+                pass
+            if location is not None:
+                break
         if location is None:
             raise ValueError("Invalid address type specifier")
-        super().__init__(match_obj, location, jt, jf)
-
         self.code.append(
-            LD(self.match_loc, size=4, mode=1)
+            LD(location, size=4, mode=1)
         )
         if addr is not None:
             netmask = 0xffffffff ^ (0xffffffff >> int(addr.group(2)))
             self.code.append(AND(netmask, mode=4))
-            self.code.append(JEQ([IPv4toWord(addr.group(1)), jt, jf], mode=7))
+            self.code.append(JEQ([IPv4toWord(addr.group(1)), self.jt, self.jf], mode=7))
         else:
-            self.code.append(JEQ([IPv4toWord(match_obj[OBJ]), jt, jf], mode=7))
+            self.code.append(JEQ([IPv4toWord(match_obj[OBJ]), self.jt, self.jf], mode=7))
+        super().compile()
 
 class MatchL2Proto(Match):
     '''Layer 2 protocol matcher'''
-    def __init__(self, l2proto, jt=None, jf=None, offset=ETHER["proto"]):
+    def __init__(self, l2proto, jt=NEXT_MATCH, jf=FAIL, offset=ETHER["proto"]):
         super().__init__(l2proto, offset, jt, jf)
+        self.l2proto = ETH_PROTOS[l2proto]
+
+    def compile(self):
         self.code.extend([
-            LD(self.match_loc, size=4, mode=1),
-            JEQ([ETH_PROTOS[l2proto], jt, jf], mode=7),
+            LD(self.match_loc, size=2, mode=1),
+            JEQ([self.l2proto, self.jt, self.jf], mode=7),
         ])
+        super().compile()
+
+class Match8021Q(MatchL2Proto):
+    '''Vlan matcher'''
+    def __init__(self, vlan, jt=NEXT_MATCH, jf=FAIL, offset=ETHER["proto"]):
+        super().__init__("qtag", jt=jt, jf=jf, offset=offset)
+        self.vlan = vlan
+        self.offset = offset
+
+    def compile(self):
+        self.code.extend([
+            LD(self.offset + 2, size=2, mode=1),
+            AND(0x3F, mode=4),
+            JEQ([self.vlan, self.jt, self.jf], mode=7)
+        ])
+        super().compile()
 
 class MatchL3Proto(Match):
     '''Layer 3 protocol matcher'''
-    def __init__(self, l3proto, jt=None, jf=None, offset=(IP["proto"] + ETHER["size"])):
+    def __init__(self, l3proto, jt=NEXT_MATCH, jf=FAIL, offset=(IP["proto"] + ETHER["size"])):
         super().__init__(l3proto, offset, jt, jf)
+        self.l3proto = IP_PROTOS[l3proto]
+
+    def compile(self):
         self.code.extend([
             LD(self.match_loc, size=1, mode=1),
-            JEQ([IP_PROTOS[l3proto], jt, jf], mode=7),
+            JEQ([self.l3proto, self.jt, self.jf], mode=7),
         ])
+        super().compile()
 
 class Fail(Match):
     '''Return with a fail code. Always the last match/instruction.'''
     def __init__(self):
         super().__init__(None, None)
+
+    def compile(self):
         self.code.extend([RET(0, label=[LAST_INSN, FAIL])])
+        super().compile()
         
 class Success(Match):
     '''Return with a success code'''
     def __init__(self):
         super().__init__(None, None)
+    
+    def compile(self):
         self.code.extend([RET(0xFFFF, label=SUCCESS)])
+        super().compile()
         
 
 class AbstractProgram():
     '''Chunk of code - fragments can be matchers or other programs'''
-    def __init__(self, jt=None, jf=None, frags=[], label=None):
+    def __init__(self, jt=NEXT_MATCH, jf=FAIL, parent=None, frags=[], label=None):
         self.label = None
         if not isinstance(frags, list):
             frags = [frags]
         self.frags = frags
         self.frag_refs_resolved = False
+        self.compiled = False
+        self.jt = jt
+        self.jf = jf
+        self.parent = parent
+        self.set_parent()
 
     def __repr__(self):
         '''Program (fragment) representation'''
@@ -444,16 +533,67 @@ class AbstractProgram():
         return res
 
     def get_code(self):
-        compiled = []
+        '''Resulting code dump'''
+        code = []
         for frag in self.frags:
-            compiled.extend(frag.get_code())
-        return compiled
+            code.extend(frag.get_code())
+        return code
 
+    def compile(self):
+        if not self.compiled:
+            for frag in self.frags:
+                frag.compile()
+            self.compiled = True
+
+    def set_parent(self):
+        for frag in self.frags:
+            frag.parent = self
+            frag.set_parent()
+
+    def replace_value(self, old, new, index=None):
+        if index is not None:
+            self.frags[index].replace_value(old, new, index=index)
+        else:
+            for frag in frags:
+                frag.replace_value(old, new)
 
 class CBPFProgram(AbstractProgram):
-    '''cBPF variant of CBPFProgram'''
-    def __init__(self, jt=None, jf=None, frags=[], label=None):
+    '''cBPF variant of AbstractProgram'''
+    def __init__(self, jt=NEXT_MATCH, jf=FAIL, frags=[], label=None, update_labels=False):
         super().__init__(jt=jt, jf=jf, frags=frags, label=label)
+
+        if update_labels:
+            if jt is not None:
+                self.set_jt(jt)
+            if jf is not None:
+                self.set_jf(jf)
+
+    def set_jt(self, jt, last_frag=False):
+        self.jt = jt
+        if last_frag:
+            self.frags[-1].set_jt(jt, last_frag=last_frag)
+        else:
+            for frag in self.frags:
+                frag.set_jt(jt)
+        
+    def set_jf(self, jf, last_frag=False):
+        self.jf = jf
+        if last_frag:
+            self.frags[-1].set_jt(jt, last_frag=last_frag)
+        else:
+            for frag in self.frags:
+                frag.set_jf(jf)
+
+    def get_start_label(self):
+        return self.frags[0].get_start_label()
+
+    def get_end_label(self):
+        return self.frags[0].get_end_label()
+
+    def get_next_match(self, item):
+        if self.frags[-1] == item: 
+            return self.parent.get_next_match(self)
+        return self.frags[self.frags.index(item) + 1].get_start_label()
 
     def resolve_frag_refs(self, old_loc_label=None):
         '''First pass in resolving references - insert
@@ -467,8 +607,10 @@ class CBPFProgram(AbstractProgram):
         for index in range(len(code) -1 , -1, -1):
             item = code[index]
             item.resolve_refs(NEXT_MATCH, next_frag)
+            if self.parent is not None:
+                item.resolve_refs(PARENT_NEXT, self.parent.get_next_match())
             for label in item.labels:
-                if "__match__" in label:
+                if "__match__start" in label:
                     next_frag = label
    
     def resolve_refs(self):
@@ -488,7 +630,6 @@ class CBPFProgram(AbstractProgram):
         for index in range(0, len(code)):
             for label in code[index].labels:
                 code[index].labels = []
-                
 
 # These are way too cBPF specific to try to make them into generic instances
 
@@ -496,73 +637,48 @@ class ProgIP(CBPFProgram):
     '''Basic match on IP - any shape or form,
        added before matching on address, proto, etc.
     '''
-    def __init__(self, jt=None, jf=None):
-        super().__init__(jt=jt, jf=jf, frags=[MatchL2Proto("ip", jt=jt, jf=jf)])
+    def __init__(self):
+        super().__init__(frags=[MatchL2Proto("ip")])
 
 class ProgIPv4(CBPFProgram):
     '''Basic match on v4 address or network.
     '''
-    def __init__(self, match_obj, jt=None, jf=None, offset=None, location=None):
+    def __init__(self, match_obj, offset=None):
         if offset is None:
-            super().__init__(frags=[ProgIP(jt=jt, jf=jf), MatchIPv4(match_obj, jt=jt, jf=jf, location=location)])
+            super().__init__(frags=[ProgIP(), MatchIPv4(match_obj)])
         else:
-            super().__init__(frags=[ProgIP(jt=jt, jf=jf), MatchIPv4(match_obj, jt=jt, jf=jf, offset=offset, location=location)])
+            super().__init__(frags=[ProgIP(), MatchIPv4(match_obj, offset=offset)])
 
 class ProgNOT(CBPFProgram):
     '''Negate the result of all frags.
     '''
-    def __init__(self, frags, jt=None, jf=None):
+    def __init__(self, frags):
+        # swap jt and jf
+
         super().__init__(frags=frags)
-        code = self.get_code()
-        for insn in code:
-            insn.replace_value(FAIL, SUCCESS)
-
-        lastfrag = self.frags[-1]
-
-        while not isinstance(lastfrag, Match):
-            lastfrag = lastfrag.frags[-1]
-        
-        lastfrag.replace_value(NEXT_MATCH, FAIL)
+        self.set_jt(FAIL, last_frag=True)
+        self.set_jf(SUCCESS)
 
 
 class ProgOR(CBPFProgram):
     '''Perform logical OR on left and right frag(s)
     '''
-    def __init__(self, left, right, jt=None, jf=None):
-        code = []
-        for item in right:
-            code.extend(item.get_code())
-        or_label = "__or_label_{}".format(code[0].get_loc())
-        code[0].add_label(or_label)
-        code = []
-        for item in left:
-            code.extend(item.get_code())
-        for insn in code:
-            insn.replace_value(FAIL, or_label)
+    def __init__(self, left, right):
+        right = CBPFProgram(frags=right)
+        left = CBPFProgram(frags=left, jt=NEXT_MATCH, jf=right.get_start_label(), update_labels=True)
+        left.set_jt(SUCCESS, last_frag=True)
 
-        frag = left[-1]
-        while not isinstance(frag, Match):
-            frag = frag.frags[-1]
-        for insn in frag.get_code():
-            insn.replace_value(NEXT_MATCH, SUCCESS)
+        super().__init__(frags=[left, right])
         
-        super().__init__(frags=left+right)
 
 class ProgAND(CBPFProgram):
     '''Perform logical AND on left and right frag(s)
     '''
-    def __init__(self, left, right, jt=None, jf=None):
-        code = []
-        for item in right:
-            code.extend(item.get_code())
-        and_label = "__and_label_{}".format(code[0].get_loc())
-        code[0].add_label(and_label)
-        code = []
-        for item in left:
-            code.extend(item.get_code())
-        for insn in code:
-            insn.replace_value(SUCCESS, and_label)
-        super().__init__(frags=left+right, jt=jt, jf=jf)
+    def __init__(self, left, right):
+
+        right = CBPFProgram(frags=right)
+        left = CBPFProgram(frags=left)
+        super().__init__(frags=[left, right])
 
 # Actual cBPF compiler
 
@@ -571,29 +687,31 @@ def do_walk_tree_cbpf(tree):
     if isinstance(tree, UnOp):
         return [ProgNOT(frags=do_walk_tree_cbpf(tree[OBJ]))]
     elif isinstance(tree, Obj):
-        if (tree[OBJTYPE] == 'ADDR_V4' or tree[OBJTYPE] == 'NET_V4'):
-            return [ProgIPv4(tree, jt=NEXT_MATCH, jf=FAIL)]
+        if tree[OBJTYPE] == 'ADDR_V4' or tree[OBJTYPE] == 'NET_V4':
+            return [ProgIPv4(tree)]
+        if tree[OBJTYPE] == 'NUM' and "vlan" in tree[QUALS]:
+            return [CBPFProgram(frags=Match8021Q(tree[OBJ]))]
     elif isinstance(tree, Proto):
         try:
-            return [CBPFProgram(frags=MatchL2Proto(tree[PROTO], jt=NEXT_MATCH, jf=FAIL), jt=NEXT_MATCH, jf=FAIL)]
+            return [CBPFProgram(frags=MatchL2Proto(tree[PROTO]))]
         except KeyError:
             return [
                 CBPFProgram(
                     frags=[
-                        MatchL2Proto("ip", jt=NEXT_MATCH, jf=FAIL),
-                        MatchL3Proto(tree[PROTO], jt=NEXT_MATCH, jf=FAIL),
+                        MatchL2Proto("ip"),
+                        MatchL3Proto(tree[PROTO]),
                     ],
                     jt=NEXT_MATCH, jf=FAIL
                 )]
     elif isinstance(tree, BinOp):
         if tree[OP] == "or":
-           return [ProgOR(do_walk_tree_cbpf(tree[LEFT]), do_walk_tree_cbpf(tree[RIGHT]), jt=NEXT_MATCH, jf=FAIL)]
-        return [ProgAND(do_walk_tree_cbpf(tree[LEFT]), do_walk_tree_cbpf(tree[RIGHT]), jt=NEXT_MATCH, jf=FAIL)]
+           return [ProgOR(do_walk_tree_cbpf(tree[LEFT]), do_walk_tree_cbpf(tree[RIGHT]))]
+        return [ProgAND(do_walk_tree_cbpf(tree[LEFT]), do_walk_tree_cbpf(tree[RIGHT]))]
 
-    return [CBPFProgram(frags=do_walk_tree_cbpf(tree[OBJ]), jt=NEXT_MATCH, jf=FAIL)]
+    return [CBPFProgram(frags=do_walk_tree_cbpf(tree[OBJ]))]
 
 def walk_tree_cbpf(tree):
     '''Invoke the tree walk - cbpf variant'''
     frags = do_walk_tree_cbpf(tree)
     frags.extend([Success(), Fail()])
-    return CBPFProgram(frags=frags, jt=NEXT_MATCH, jf=FAIL)
+    return CBPFProgram(frags=frags)

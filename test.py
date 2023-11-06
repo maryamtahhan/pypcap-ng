@@ -30,12 +30,27 @@ def main():
 
     print(serialize(parsed))
 
-    compiled = compiler.walk_tree_cbpf(parsed)
+    generated = compiler.walk_tree_cbpf(parsed)
+    generated.compile()
 
-    compiled.resolve_frag_refs()
-    compiled.resolve_refs()
+    counter = 0
+    for inst in generated.get_code():
+        print("{} {}".format(counter, inst))
+        counter += 1
 
-    print(compiled)
+    generated.resolve_frag_refs()
+
+    counter = 0
+    for inst in generated.get_code():
+        print("{} {}".format(counter, inst))
+        counter += 1
+
+    generated.resolve_refs()
+
+    counter = 0
+    for inst in generated.get_code():
+        print("{} {}".format(counter, inst))
+        counter += 1
 
 if __name__ == "__main__":
     main()
