@@ -27,6 +27,7 @@ precedence = (
 
 def p_operators(p):
     '''expression : binary_op
+                  | negation
                   | brackets
                   | term
     '''
@@ -46,20 +47,13 @@ def p_brackets(p):
     '''
     p[0] = p[2]
 
+def p_negation(p):
+    '''negation  : NOT expression'''
+    print(p[2])
+    p[0] = code_objects.ProgNOT(p[2])
 
-def p_term(p):
-    '''term     : rterm
-                | not_term
-    '''
-
-    p[0] = p[1]
-
-def p_not_term(p):
-    '''not_term : NOT rterm'''
-    p[0] = ProgNot(p[1])
-
-def p_rterm(p):   
-    '''rterm    : head id
+def p_term(p):   
+    '''term    : head id
                 | pname
                 | other
     '''

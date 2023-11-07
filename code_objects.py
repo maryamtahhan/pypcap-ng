@@ -582,7 +582,7 @@ class CBPFProgram(AbstractProgram):
     def set_jf(self, jf, last_frag=False):
         self.jf = jf
         if last_frag:
-            self.frags[-1].set_jt(jt, last_frag=last_frag)
+            self.frags[-1].set_jf(jf, last_frag=last_frag)
         else:
             for frag in self.frags:
                 frag.set_jf(jf)
@@ -667,22 +667,40 @@ class ProgOR(CBPFProgram):
     '''Perform logical OR on left and right frag(s)
     '''
     def __init__(self, left, right):
-        right = CBPFProgram(frags=right)
-        left = CBPFProgram(frags=left, jt=NEXT_MATCH, jf=right.get_start_label(), update_labels=True)
+        self.right = CBPFProgram(frags=right)
+        self.left = CBPFProgram(frags=left, jt=NEXT_MATCH, jf=right.get_start_label(), update_labels=True)
         left.set_jt(SUCCESS, last_frag=True)
 
-        super().__init__(frags=[left, right])
-        
+        super().__init__(frags=[self.left, self.right])
 
+    def set_jt(self, jt, last_frag=False):
+        self.jt = jt
+        if last_frag:
+            self.left.set_jt(jt, last_frag=last_frag)
+            self.right.set_jt(jt, last_frag=last_frag)
+        else:
+            for frag in self.frags:
+                frag.set_jt(jt)
+    
+    def set_jf(self, jf, last_frag=False):
+        self.jf = jf
+        if last_frag:
+            self.left.set_jf(jf, last_frag=last_frag)
+            self.right.set_jt(jf, last_frag=last_frag)
+        else:
+            for frag in self.frags:
+                frag.set_jf(jf)
+ 
 class ProgAND(CBPFProgram):
     '''Perform logical AND on left and right frag(s)
     '''
     def __init__(self, left, right):
 
-        right = CBPFProgram(frags=right)
-        left = CBPFProgram(frags=left)
-        super().__init__(frags=[left, right])
+        self.right = CBPFProgram(frags=right)
+        self.left = CBPFProgram(frags=left)
+        super().__init__(frags=[self.left, self.right])
 
+   
 
 def finalize(prog):
     '''Add success and failure return instructions to the end'''
