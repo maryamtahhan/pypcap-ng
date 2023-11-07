@@ -10,9 +10,6 @@ Compiler backends.
 
 from struct import Struct
 import re
-import parser
-from parsed_tree import LEFT, RIGHT, OP, OBJ, QUALS, OBJTYPE, PROTO
-from parsed_tree import Expr, BinOp, Match, UnOp, Head, Obj, Proto
 from header_constants import ETHER, IP, ETH_PROTOS, IP_PROTOS
 
 
@@ -51,7 +48,7 @@ def IPv4toWord(ipv4):
     if match is not None:
         scale = 24
         total = 0
-        for index in range(1,4):
+        for index in range(1,5):
             nibble = int(match.group(index))
             if nibble > 256 or nibble < 0:
                 raise TypeError("Invalid IP address")
@@ -91,12 +88,13 @@ class AbstractCode(dict):
     '''
     def __init__(self, label=None):
         self.values = []
-        self.labels = []
         if label is not None:
             if isinstance(label, list):
-                self.labels.extend(label)
+                self.labels = set(label)
             else:
-                self.labels = [label]
+                self.labels = set([label])
+        else:
+            self.labels = set()
         self.loc = COMPILER_STATE.get_loc()
 
     def has_label(self, label):
@@ -105,15 +103,11 @@ class AbstractCode(dict):
 
     def add_label(self, label):
         '''Add a label'''
-        if not label in self.labels:
-            self.labels.append(label)
+        self.labels = self.labels | set([label])
 
     def replace_label(self, label, newlabel):
         '''Replace a label'''
-        for index in range(0, len(self.labels)):
-            if self.labels[index] == label:
-                self.labels[index] = newlabel
-                break
+        self.labels = self.labels ^ set([label]) | set([newlabel])
 
     def replace_value(self, value, newvalue):
         '''Replace a value'''
@@ -363,6 +357,7 @@ class Match(AbstractCode):
         self.match_obj = match_obj
         self.match_loc = match_loc
         self.parent = parent
+        self.quals = set()
 
     def __repr__(self):
         '''Printable form - just print the instructions'''
@@ -397,6 +392,9 @@ class Match(AbstractCode):
     def set_parent(self):
         pass
 
+    def add_quals(self, quals):
+        self.quals = self.quals | quals
+
     def compile(self):
         '''Compile the code'''
         self.compiled = True
@@ -424,14 +422,13 @@ class MatchIPv4(Match):
     def __init__(self, match_obj, jt=NEXT_MATCH, jf=FAIL, match_off=ETHER["size"]):
 
         super().__init__(match_obj, match_off, jt, jf)
-        
 
     def compile(self):
         '''Generate the actual code for the match'''
 
-        addr = V4_NET_REGEXP.match(self.match_obj[OBJ])
+        addr = V4_NET_REGEXP.match(self.match_obj)
         location = None
-        for qual in self.match_obj[QUALS]:
+        for qual in self.quals:
             try:
                 location = self.match_loc + IP[qual]
             except KeyError:
@@ -448,7 +445,7 @@ class MatchIPv4(Match):
             self.code.append(AND(netmask, mode=4))
             self.code.append(JEQ([IPv4toWord(addr.group(1)), self.jt, self.jf], mode=7))
         else:
-            self.code.append(JEQ([IPv4toWord(match_obj[OBJ]), self.jt, self.jf], mode=7))
+            self.code.append(JEQ([IPv4toWord(self.match_obj), self.jt, self.jf], mode=7))
         super().compile()
 
 class MatchL2Proto(Match):
@@ -523,6 +520,7 @@ class AbstractProgram():
         self.jt = jt
         self.jf = jf
         self.parent = parent
+        self.quals = set()
         self.set_parent()
 
     def __repr__(self):
@@ -538,6 +536,11 @@ class AbstractProgram():
         for frag in self.frags:
             code.extend(frag.get_code())
         return code
+
+    def add_quals(self, quals):
+        '''Resulting code dump'''
+        for frag in self.frags:
+            frag.add_quals(quals)
 
     def compile(self):
         if not self.compiled:
@@ -680,38 +683,7 @@ class ProgAND(CBPFProgram):
         left = CBPFProgram(frags=left)
         super().__init__(frags=[left, right])
 
-# Actual cBPF compiler
 
-def do_walk_tree_cbpf(tree):
-    '''Walk recursively a parsed tree and invoke compiler to generate cBPF'''
-    if isinstance(tree, UnOp):
-        return [ProgNOT(frags=do_walk_tree_cbpf(tree[OBJ]))]
-    elif isinstance(tree, Obj):
-        if tree[OBJTYPE] == 'ADDR_V4' or tree[OBJTYPE] == 'NET_V4':
-            return [ProgIPv4(tree)]
-        if tree[OBJTYPE] == 'NUM' and "vlan" in tree[QUALS]:
-            return [CBPFProgram(frags=Match8021Q(tree[OBJ]))]
-    elif isinstance(tree, Proto):
-        try:
-            return [CBPFProgram(frags=MatchL2Proto(tree[PROTO]))]
-        except KeyError:
-            return [
-                CBPFProgram(
-                    frags=[
-                        MatchL2Proto("ip"),
-                        MatchL3Proto(tree[PROTO]),
-                    ],
-                    jt=NEXT_MATCH, jf=FAIL
-                )]
-    elif isinstance(tree, BinOp):
-        if tree[OP] == "or":
-           return [ProgOR(do_walk_tree_cbpf(tree[LEFT]), do_walk_tree_cbpf(tree[RIGHT]))]
-        return [ProgAND(do_walk_tree_cbpf(tree[LEFT]), do_walk_tree_cbpf(tree[RIGHT]))]
-
-    return [CBPFProgram(frags=do_walk_tree_cbpf(tree[OBJ]))]
-
-def walk_tree_cbpf(tree):
-    '''Invoke the tree walk - cbpf variant'''
-    frags = do_walk_tree_cbpf(tree)
-    frags.extend([Success(), Fail()])
-    return CBPFProgram(frags=frags)
+def finalize(prog):
+    '''Add success and failure return instructions to the end'''
+    return CBPFProgram(frags=[prog, Success(), Fail()], jt=NEXT_MATCH, jf=FAIL)

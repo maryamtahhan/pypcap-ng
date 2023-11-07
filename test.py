@@ -1,10 +1,9 @@
 #!/usr/bin/python3
 
 from argparse import ArgumentParser
-import compiler
 import parser
 from parsed_tree import LEFT, RIGHT, OP, OBJ, QUALS, OBJTYPE, PROTO
-from parsed_tree import serialize
+from code_objects import finalize
 
 
 def main():
@@ -26,29 +25,26 @@ def main():
         )
     args = vars(aparser.parse_args())
 
-    parsed = parser.PARSER.parse(args["expr"])
+    parsed = finalize(parser.PARSER.parse(args["expr"]))
 
-    print(serialize(parsed))
-
-    generated = compiler.walk_tree_cbpf(parsed)
-    generated.compile()
+    parsed.compile()
 
     counter = 0
-    for inst in generated.get_code():
+    for inst in parsed.get_code():
         print("{} {}".format(counter, inst))
         counter += 1
 
-    generated.resolve_frag_refs()
+    parsed.resolve_frag_refs()
 
     counter = 0
-    for inst in generated.get_code():
+    for inst in parsed.get_code():
         print("{} {}".format(counter, inst))
         counter += 1
 
-    generated.resolve_refs()
+    parsed.resolve_refs()
 
     counter = 0
-    for inst in generated.get_code():
+    for inst in parsed.get_code():
         print("{} {}".format(counter, inst))
         counter += 1
 

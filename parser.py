@@ -15,9 +15,9 @@ import ply.lex as lex
 import ply.yacc as yacc
 from lexer_defs import tokens
 import lexer_defs
+import code_objects
 
 from parsed_tree import LEFT, RIGHT, OP, OBJ, QUALS, OBJTYPE, PROTO
-from parsed_tree import Expr, BinOp, Match, UnOp, Head, Obj, Proto
 
 precedence = (
     ('left', 'OR', 'AND'),
@@ -25,28 +25,38 @@ precedence = (
     ('left', 'LSH', 'RSH'),
 )
 
-def p_binary_operators(p):
-    '''expression : expression AND expression
-                  | expression OR expression
-                  | LPAREN expression RPAREN
+def p_operators(p):
+    '''expression : binary_op
+                  | brackets
                   | term
     '''
-    if len(p) == 4:
-        if p[1] != '(':
-            p[0] = BinOp(p[1], p[3], p[2])
-        else:
-            p[0] = p[2]
+    p[0] = p[1]
+
+def p_binary_operators(p):
+    '''binary_op  : expression AND expression
+                  | expression OR expression
+    '''
+    if p[2].lower() == 'or':
+        p[0] = code_objects.ProgOR(left=p[1], right=p[3])
     else:
-        p[0] = Match(p[1])
+        p[0] = code_objects.ProgAND(left=p[1], right=p[3])
+
+def p_brackets(p):
+    '''brackets  : LPAREN expression RPAREN
+    '''
+    p[0] = p[2]
+
 
 def p_term(p):
     '''term     : rterm
-                | NOT rterm
+                | not_term
     '''
-    if len(p) == 3:
-        p[0] = UnOp(p[2], p[1])
-    else:
-        p[0] = p[1]
+
+    p[0] = p[1]
+
+def p_not_term(p):
+    '''not_term : NOT rterm'''
+    p[0] = ProgNot(p[1])
 
 def p_rterm(p):   
     '''rterm    : head id
@@ -54,7 +64,7 @@ def p_rterm(p):
                 | other
     '''
     if len(p) == 3:
-        p[2].quals(p[1].quals())
+        p[2].add_quals(p[1])
         p[0] = p[2]
     else:
         p[0] = p[1]
@@ -71,7 +81,7 @@ def p_head(p):
                 | pname GATEWAY
                 |
     '''
-    p[0] = Head(p[1:])
+    p[0] = set(p[1:])
         
 
 def p_pname(p):
@@ -115,7 +125,17 @@ def p_pname(p):
                 | NETBEUI
                 | RADIO
 '''
-    p[0] = Proto(p[1])
+    try:
+        p[0] = [code_objects.CBPFProgram(frags=MatchL2Proto(p[1]))]
+    except KeyError:
+        return [
+            code_objects.CBPFProgram(
+                frags=[
+                    MatchL2Proto("ip"),
+                    MatchL3Proto(p[1]),
+                ],
+                jt=NEXT_MATCH, jf=FAIL
+            )]
 
 def p_dqual(p):
     '''dqual : SRC
@@ -150,16 +170,13 @@ def p_other(p):
                 | GENEVE NUM
                 | GENEVE
     '''
-    if len(p) == 2:
-        p[0] = Obj(None, quals=[p[1]])
-    else:
-        p[0] = Obj(int(p[2]), quals=[p[1]], objtype='NUM')
+    pass
 
 def p_bmcast(p):
     '''bmcast   : pname TK_BROADCAST
                 | pname TK_MULTICAST
     '''
-    p[0] = Obj(None, quals=[p[1], p[2]])
+    pass
     
 
 def p_aqual(p):
@@ -182,7 +199,7 @@ def p_id(p):
 def p_num(p):
     '''num : NUM 
     '''
-    p[0] = Obj(int(p[1]), objtype='NUM')
+    pass
 
 def p_addr(p):
     '''addr : addr4
@@ -193,12 +210,12 @@ def p_addr(p):
 def p_addr4(p):
     '''addr4 : ADDR_V4
     '''
-    p[0] = Obj(p[1], objtype='ADDR_V4')
+    p[0] = code_objects.ProgIPv4(p[1])
 
 def p_addr6(p):
     '''addr6 : ADDR_V6
     '''
-    p[0] = Obj(p[1], objtype='ADDR_V6')
+    pass
 
 def p_net(p):
     '''net  : net4
@@ -209,17 +226,17 @@ def p_net(p):
 def p_net4(p):
     '''net4 : NET_V4
     '''
-    p[0] = Obj(p[1], objtype='NET_V4')
+    p[0] = code_objects.ProgIPv4(p[1])
 
 def p_net6(p):
     '''net6 : NET_V6
     '''
-    p[0] = Obj(p[1], objtype='NET_V6')
+    pass
 
 def p_hostname(p):
     '''hostname : STRING_LITERAL
     '''
-    p[0] = Obj(p[1], objtype='STRING_LITERAL')
+    p[0] = p[1]
 
 
 lexer = lex.lex(module=lexer_defs)
