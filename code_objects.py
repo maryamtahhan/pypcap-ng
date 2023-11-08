@@ -89,8 +89,10 @@ class AbstractCode(dict):
     def __init__(self, label=None):
         self.values = []
         if label is not None:
-            if isinstance(label, list):
+            if isinstance(label, list) and len(label) > 0:
                 self.labels = set(label)
+            elif isinstance(label, set):
+                self.labels = self.labels | label
             else:
                 self.labels = set([label])
         else:
@@ -135,7 +137,9 @@ class AbstractCode(dict):
         "Return loc"
         return self.loc
 
-
+    def __eq__(self, other):
+        '''Equal - needed for tests'''
+        return self.labels == other.labels
 
 class CBPFCode(AbstractCode):
     '''BPF variant of code generation'''
@@ -144,6 +148,13 @@ class CBPFCode(AbstractCode):
         self.code = code + reg
         self.code += SIZE_MODS[size]
         self.mode = mode
+        self.reg = reg
+        self.size = size
+
+    def __eq__(self, other):
+        '''Equal - needed for tests'''
+        return super().__eq__(other) and self.code == other.code and \
+               self.values == other.values and self.mode == other.mode
 
     def __repr__(self):
         '''Printable form of BPF instructions'''
@@ -161,6 +172,21 @@ class CBPFCode(AbstractCode):
         '''Verify mode'''
         if not mode in mask:
             raise TypeError("Invalid Addressing mode {} not {} in ".format(mode, mask))
+
+    def verbose_print(self):
+        '''Print suitable for sticking the result into a test case'''
+        
+        if self.reg != "": 
+            if len(self.labels) == 0:
+                return "code_objects.{}({}, reg={}, size={}, mode={})".format(
+                        self.__class__.__name__, self.values, self.reg, self.size, self.mode)
+            return "code_objects.{}({}, reg={}, size={}, mode={}, label={})".format(
+                    self.__class__.__name__, self.values, self.reg, self.size, self.mode, self.labels)
+        if len(self.labels) == 0:
+            return "code_objects.{}({}, size={}, mode={})".format(
+                    self.__class__.__name__, self.values, self.size, self.mode)
+        return "code_objects.{}({}, size={}, mode={}, label={})".format(
+                self.__class__.__name__, self.values, self.size, self.mode, self.labels)
 
 class LD(CBPFCode):
     '''Load into A or X'''
@@ -214,124 +240,124 @@ class CondJump(Jump):
 
 class JEQ(CondJump):
     '''Jump on equal'''
-    def __init__(self, values, mode=None, label=None):
+    def __init__(self, values, mode=None, label=None, size=None):
         super().__init__(values, code="jeq", mode=mode, label=label)
         
 class JNEQ(CondJump):
     '''Jump on not equal'''
-    def __init__(self, values, mode=None, label=None):
-        super().__init__(vlues, code="jneq", mode=mode, label=label)
+    def __init__(self, values, mode=None, label=None, size=None):
+        super().__init__(values, code="jneq", mode=mode, label=label)
 
 class JNE(CondJump):
     '''Jump on not equal'''
-    def __init__(self, values, mode=None, label=None):
+    def __init__(self, values, mode=None, label=None, size=None):
         super().__init__(values, code="jne", mode=mode, label=label)
 
 class JLT(CondJump):
     '''Jump on less then'''
-    def __init__(self, values, mode=None, label=None):
+    def __init__(self, values, mode=None, label=None, size=None):
         super().__init__(values, code="jlt", mode=mode, label=label)
 
 class JLE(CondJump):
     '''Jump on less or equal'''
-    def __init__(self, values, mode=None, label=None):
+    def __init__(self, values, mode=None, label=None, size=None):
         super().__init__(values, code="jlt", mode=mode, label=label)
 
 class JGT(CondJump):
     '''Jump on greater'''
-    def __init__(self, values, mode=None, label=None):
+    def __init__(self, values, mode=None, label=None, size=None):
         super().__init__(values, code="jgt", mode=mode, label=label)
 
 class JGE(CondJump):
     '''Jump on greater or equal'''
-    def __init__(self, values, mode=None, label=None):
+    def __init__(self, values, mode=None, label=None, size=None):
         super().__init__(values, code="jge", mode=mode, label=label)
 
 class JSET(CondJump):
     '''Jump on a set bit'''
-    def __init__(self, values, mode=None, label=None):
+    def __init__(self, values, mode=None, label=None, size=None):
         super().__init__(values, code="jset", mode=mode, label=label)
 
 class Arithmetics(CBPFCode):
     '''Generic arithmetic instruction'''
-    def __init__(self, values, code=None, mode=None, label=None):
+    def __init__(self, values, code=None, mode=None, label=None, size=4):
         self.check_mode(mode, [0, 4])
-        super().__init__(code=code, mode=mode, label=label)
+        super().__init__(code=code, mode=mode, label=label, size=size)
         self.set_values(values)
 
 class ADD(Arithmetics):
     '''ADD instruction'''
-    def __init__(self, values, mode=None, label=None):
-        super().__init__(values, code="add", mode=mode, label=label)
+    def __init__(self, values, mode=None, label=None, size=4):
+        super().__init__(values, code="add", mode=mode, label=label, size=size)
 
 class SUB(Arithmetics):
     '''SUB instruction'''
-    def __init__(self, values, mode=None, label=None):
-        super().__init__(values, code="sub", mode=mode, label=label)
+    def __init__(self, values, mode=None, label=None, size=4):
+        super().__init__(values, code="sub", mode=mode, label=label, size=4)
 
 class MUL(Arithmetics):
     '''MUL instruction'''
-    def __init__(self, values, mode=None, label=None):
-        super().__init__(values, code="mul", mode=mode, label=label)
+    def __init__(self, values, mode=None, label=None, size=4):
+        super().__init__(values, code="mul", mode=mode, label=label, size=4)
 
 class DIV(Arithmetics):
     '''DIV instruction'''
-    def __init__(self, values, mode=None, label=None):
-        super().__init__(values, code="div", mode=mode, label=label)
+    def __init__(self, values, mode=None, label=None, size=4):
+        super().__init__(values, code="div", mode=mode, label=label, size=4)
 
 class MOD(Arithmetics):
     '''MOD instruction'''
-    def __init__(self, values, mode=None, label=None):
-        super().__init__(values, code="mod", mode=mode, label=label)
+    def __init__(self, values, mode=None, label=None, size=4):
+        super().__init__(values, code="mod", mode=mode, label=label, size=4)
 
 class AND(Arithmetics):
     '''Arithmetic AND instruction'''
-    def __init__(self, values, mode=None, label=None):
-        super().__init__(values, code="and", mode=mode, label=label)
+    def __init__(self, values, mode=None, label=None, size=4):
+        super().__init__(values, code="and", mode=mode, label=label, size=4)
 
 class OR(Arithmetics):
     '''Arithmetic OR instruction'''
-    def __init__(self, values, mode=None, label=None):
-        super().__init__(values, code="or", mode=mode, label=label)
+    def __init__(self, values, mode=None, label=None, size=4):
+        super().__init__(values, code="or", mode=mode, label=label, size=4)
 
 class XOR(Arithmetics):
     '''Arithmetic XOR instruction'''
-    def __init__(self, values, mode=None, label=None):
-        super().__init__(values, code="xor", mode=mode, label=label)
+    def __init__(self, values, mode=None, label=None, size=4):
+        super().__init__(values, code="xor", mode=mode, label=label, size=4)
 
 class LSH(Arithmetics):
     '''LSH instruction'''
-    def __init__(self, values, mode=None, label=None):
-        super().__init__(values, code="lsh", mode=mode, label=label)
+    def __init__(self, values, mode=None, label=None, size=4):
+        super().__init__(values, code="lsh", mode=mode, label=label, size=4)
 
 class RSH(Arithmetics):
     '''RSH instruction'''
-    def __init__(self, values, mode=None, label=None):
-        super().__init__(values, code="rsh", mode=mode, label=label)
+    def __init__(self, values, mode=None, label=None, size=4):
+        super().__init__(values, code="rsh", mode=mode, label=label, size=4)
 
 class NEG(CBPFCode):
     '''NEG instruction'''
-    def __init__(self, label=None):
-        super().__init__(None, code="neg", label=label)
+    def __init__(self, label=None, size=4):
+        super().__init__(None, code="neg", label=label, size=4)
 
 class TAX(CBPFCode):
     '''Transfer A to X'''
-    def __init__(self, label=None):
-        super().__init__(None, code="tax", label=label)
+    def __init__(self, label=None, size=4):
+        super().__init__(None, code="tax", label=label, size=4)
 
 class TXA(CBPFCode):
     '''Transfer X to A'''
-    def __init__(self, label=None):
-        super().__init__(None, code="txa", label=label)
+    def __init__(self, label=None, size=4):
+        super().__init__(None, code="txa", label=label, size=4)
 
 class RET(CBPFCode):
     '''RET with result.
        cBPF convention is 0 for failure and non
        negative packet "size" for success
     '''
-    def __init__(self, values, mode=4, label=None):
+    def __init__(self, values, mode=4, label=None, size=4):
         self.check_mode(mode, [4, 11])
-        super().__init__(code="ret", mode=mode, label=label)
+        super().__init__(code="ret", mode=mode, label=label, size=4)
         self.set_values(values)
 
 
@@ -414,6 +440,10 @@ class Match(AbstractCode):
     def get_next_match(self):
         if self.parent is not None:
             return parent.get_next_match(self)
+
+    def __eq__(self, other):
+        '''We are only interested in equality of the generated code.'''
+        return self.code() == other.code()
 
 V4_NET_REGEXP = re.compile("(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\/(\d{1,2})")
 
@@ -522,6 +552,10 @@ class AbstractProgram():
         self.parent = parent
         self.quals = set()
         self.set_parent()
+
+    def __eq__(self, other):
+        '''We are only interested in equality of the generated code.'''
+        return self.code() == other.code()
 
     def __repr__(self):
         '''Program (fragment) representation'''
@@ -632,7 +666,7 @@ class CBPFProgram(AbstractProgram):
 
         for index in range(0, len(code)):
             for label in code[index].labels:
-                code[index].labels = []
+                code[index].labels = set()
 
 # These are way too cBPF specific to try to make them into generic instances
 
