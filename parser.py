@@ -15,9 +15,7 @@ import ply.lex as lex
 import ply.yacc as yacc
 from lexer_defs import tokens
 import lexer_defs
-import code_objects
-
-from parsed_tree import LEFT, RIGHT, OP, OBJ, QUALS, OBJTYPE, PROTO
+from dispatcher import DISPATCH
 
 precedence = (
     ('left', 'OR', 'AND'),
@@ -38,9 +36,9 @@ def p_binary_operators(p):
                   | expression OR expression
     '''
     if p[2].lower() == 'or':
-        p[0] = code_objects.ProgOR(left=p[1], right=p[3])
+        p[0] = DISPATCH["or"](left=p[1], right=p[3])
     else:
-        p[0] = code_objects.ProgAND(left=p[1], right=p[3])
+        p[0] = DISPATCH["and"](left=p[1], right=p[3])
 
 def p_brackets(p):
     '''brackets  : LPAREN expression RPAREN
@@ -49,8 +47,7 @@ def p_brackets(p):
 
 def p_negation(p):
     '''negation  : NOT expression'''
-    print(p[2])
-    p[0] = code_objects.ProgNOT(p[2])
+    p[0] = DISPATCH["not"](p[2])
 
 def p_term(p):   
     '''term    : head id
@@ -120,15 +117,14 @@ def p_pname(p):
                 | RADIO
 '''
     try:
-        p[0] = [code_objects.CBPFProgram(frags=MatchL2Proto(p[1]))]
+        p[0] = [DISPATCH["generic"](frags=MatchL2Proto(p[1]))]
     except KeyError:
         return [
-            code_objects.CBPFProgram(
+            DISPATCH["generic"](
                 frags=[
                     MatchL2Proto("ip"),
                     MatchL3Proto(p[1]),
-                ],
-                jt=NEXT_MATCH, jf=FAIL
+                ]
             )]
 
 def p_dqual(p):
@@ -204,7 +200,7 @@ def p_addr(p):
 def p_addr4(p):
     '''addr4 : ADDR_V4
     '''
-    p[0] = code_objects.ProgIPv4(p[1])
+    p[0] = DISPATCH["ipv4"](p[1])
 
 def p_addr6(p):
     '''addr6 : ADDR_V6
@@ -220,7 +216,7 @@ def p_net(p):
 def p_net4(p):
     '''net4 : NET_V4
     '''
-    p[0] = code_objects.ProgIPv4(p[1])
+    p[0] = DISPATCH["ipv4"](p[1])
 
 def p_net6(p):
     '''net6 : NET_V6

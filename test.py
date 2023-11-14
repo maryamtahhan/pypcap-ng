@@ -3,7 +3,8 @@
 from argparse import ArgumentParser
 import parser
 from parsed_tree import LEFT, RIGHT, OP, OBJ, QUALS, OBJTYPE, PROTO
-from code_objects import finalize
+from bpf_objects import finalize, ProgramEncoder, loads_hook
+import json
 
 
 def main():
@@ -27,19 +28,21 @@ def main():
 
     parsed = finalize(parser.PARSER.parse(args["expr"]))
 
-    parsed.compile()
+    print("compile")
 
+    parsed.compile()
     counter = 0
     for inst in parsed.get_code():
         print("{} {}".format(counter, inst))
         counter += 1
+
+
+
+    print("frag_refs")
 
     parsed.resolve_frag_refs()
 
-    counter = 0
-    for inst in parsed.get_code():
-        print("{} {}".format(counter, inst))
-        counter += 1
+    print("all_refs")
 
     parsed.resolve_refs()
 
@@ -47,6 +50,9 @@ def main():
     for inst in parsed.get_code():
         print("{} {}".format(counter, inst))
         counter += 1
+
+
+
 
 if __name__ == "__main__":
     main()
