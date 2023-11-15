@@ -122,26 +122,37 @@ def p_pname(p):
         return [
             DISPATCH["generic"](
                 frags=[
-                    MatchL2Proto("ip"),
-                    MatchL3Proto(p[1]),
+                    DISPATCH["ip"](),
+                    DISPATCH["l3"](match_object=p[1]),
                 ]
             )]
 
 def p_dqual(p):
     '''dqual : SRC
              | DST
-             | SRC OR DST
-             | DST OR SRC
-             | DST AND SRC
-             | SRC AND DST
              | ADDR1
              | ADDR2
              | ADDR3
              | ADDR4
              | RA
              | TA
+             | srcordst
+             | srcanddst
     '''
     p[0] = p[1]
+
+def p_srcordst(p):
+    '''srcordst :  SRC OR DST
+                 | DST OR SRC
+    '''
+    p[0] = "srcordst"
+    
+def p_srcanddst(p):
+    '''srcanddst :  SRC AND DST
+                 | DST AND SRC
+    '''
+    p[0] = "srcanddst"
+    
 
 def p_other(p):
     '''other    : bmcast

@@ -38,10 +38,6 @@ def main():
 
 
 
-    print("frag_refs")
-
-    parsed.resolve_frag_refs()
-
     print("all_refs")
 
     parsed.resolve_refs()

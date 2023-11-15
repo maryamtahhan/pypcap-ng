@@ -294,9 +294,6 @@ class CBPFProgram(AbstractProgram):
                 "on_success": on_success,
                 "on_failure": on_failure,
                 "name":"generic",
-                "compiled":False,
-                "first_pass":False,
-                "second_pass":False,
                 "offset":offset,
             })
 
@@ -326,7 +323,7 @@ class CBPFProgram(AbstractProgram):
             self.frags[-1].replace_value(NEXT_MATCH, self.ext_label)
         code[0].add_label(self.ext_label)
         self.code.extend(code)
- 
+
 
     def compile(self):
         '''Compile the code and mark it as compiled'''
@@ -385,8 +382,8 @@ class CBPFProgram(AbstractProgram):
         '''Set start label'''
         if len(self.frags) > 0:
             return self.frags[0].get_start_label()
-        else:
-            return f"__start__{self.loc}"
+
+        return f"__start__{self.loc}"
 
     def get_end_label(self):
         '''Get start label'''
@@ -398,38 +395,10 @@ class CBPFProgram(AbstractProgram):
             return self.parent.get_next_match(self)
         return self.frags[self.frags.index(item) + 1].get_start_label()
 
-    def resolve_frag_refs(self, old_loc_label=None):
-        '''First pass in resolving references - insert
-           internal labels to next code fragment where needed'''
-
-        if self.attribs["first_pass"]:
-            return
-
-        self.attribs["first_pass"] = True
-
-        code = self.get_code()
-
-        if not code[-1].has_label(LAST_INSN):
-            raise ValueError("Invalid Program - no last instruction marker")
-        next_frag = LAST_INSN
-        for index in range(len(code) -1 , -1, -1):
-            item = code[index]
-            item.resolve_refs(NEXT_MATCH, next_frag)
-            if self.parent is not None:
-                item.resolve_refs(PARENT_NEXT, self.parent.get_next_match())
-            for label in item.labels:
-                if "__match__start" in label:
-                    next_frag = label
-
     def resolve_refs(self):
         '''Second pass'''
 
-        if self.attribs["second_pass"]:
-            return
-
-        self.attribs["second_pass"] = True
         code = self.get_code()
-
         labels = {}
 
         for index in range(0, len(code)):
@@ -540,20 +509,39 @@ class ProgIP(CBPFProgram):
 class ProgIPv4(CBPFProgram):
     '''Basic match on v4 address or network.
     '''
-    def __init__(self, match_object=None, offset=0, attribs=None):
+    def __init__(self, match_object=None, offset=0, attribs=None, add_ip_check=True):
 
         if attribs is not None:
             super().__init__(attribs=attribs)
         else:
             super().__init__(match_object=match_object, offset=offset)
-            self.frags = [ProgIP(offset=offset)]
+            if add_ip_check:
+                self.frags = [ProgIP(offset=offset)]
         self.attribs["name"] = "ipv4"
+
+    def add_quals(self, quals):
+        '''Override add_quals to take care of "interesting" syntax'''
+        super().add_quals(quals)
+        if "srcordst" in self.quals or "srcanddst" in self.quals:
+            left = ProgIPv4(match_object=self.match_object, offset=self.offset, add_ip_check=False)
+            right = ProgIPv4(match_object=self.match_object, offset=self.offset, add_ip_check=False)
+            left.add_quals(set(["src"]))
+            right.add_quals(set(["dst"]))
+            if "srcordst" in self.quals:
+                self.frags.append(ProgOR(left=left, right=right))
+            else:
+                self.frags.append(ProgAND(left=left, right=right))
 
     def compile(self):
         '''Generate the actual code for the match'''
 
         addr = V4_NET_REGEXP.match(self.match_object)
         location = None
+
+        if "srcordst" in self.quals or "srcanddst" in self.quals:
+            super().compile()
+            return
+
         for qual in self.quals:
             try:
                 location = ETHER["size"] + self.offset + IP[qual]
@@ -562,7 +550,8 @@ class ProgIPv4(CBPFProgram):
             if location is not None:
                 break
         if location is None:
-            raise ValueError("Invalid address type specifier")
+            raise ValueError(f"Invalid address type specifier {self.quals}")
+
         super().compile()
 
         code = [LD(location, size=4, mode=1)]
@@ -586,9 +575,6 @@ class ProgNOT(CBPFProgram):
     def compile(self):
         '''Compile NOT - inverse true and false'''
         super().compile()
-
-        print("code is {}".format(self.code))
-
         self.replace_value(NEXT_MATCH, "__temp_not")
         self.replace_value(FAIL, NEXT_MATCH)
         self.replace_value("__temp_not", FAIL)
@@ -660,6 +646,8 @@ def finalize(prog):
 JUMPTABLE = {
     "generic":CBPFProgram,
     "ip":ProgIP,
+    "l2":ProgL2,
+    "l3":ProgL3,
     "ipv4":ProgIPv4,
     "not":ProgNOT,
     "or":ProgOR,
