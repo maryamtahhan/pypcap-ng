@@ -120,6 +120,12 @@ class AbstractProgram():
         self.loc = COMPILER_STATE.get_loc()
         self.attribs["quals"] = set()
 
+    def drop_frags(self):
+        '''Drop any subprograms created by default or added later -
+           we need only the code produced up to this level
+        '''
+        self.attribs["frags"] = []
+
     def __eq__(self, other):
         '''We are only interested in equality of the generated code.'''
         return self.code == other.code

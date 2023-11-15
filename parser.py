@@ -16,6 +16,7 @@ import ply.yacc as yacc
 from lexer_defs import tokens
 import lexer_defs
 from dispatcher import DISPATCH
+from header_constants import ETH_PROTOS, IP_PROTOS
 
 precedence = (
     ('left', 'OR', 'AND'),
@@ -58,8 +59,9 @@ def p_term(p):
     p[0] = p[1]
 
 def p_hterm(p):   
-    '''hterm    : head id
+    '''hterm    : head qterm
     '''
+    p[2].drop_frags()
     p[0] = DISPATCH["and"](left=p[1], right=p[2])
 
 
@@ -71,13 +73,17 @@ def p_qterm(p):
 
 
 def p_head(p):
-    '''head     : pname quals
+    '''head     : pname 
 	            | pname PROTO
 	            | pname PROTOCHAIN
                 | pname GATEWAY
                 |
     '''
-    p[0] = p[1]
+    if len(p) == 2:
+        p[0] = p[1]
+    elif len(p) == 2:
+        raise TypeError("pname PROTO not supported")
+        
 
 def p_quals(p):
     '''quals    : dqual aqual
@@ -129,13 +135,13 @@ def p_pname(p):
                 | RADIO
 '''
     try:
-        p[0] = [DISPATCH["generic"](frags=MatchL2Proto(p[1]))]
+        p[0] = [DISPATCH["generic"](frags=DISPATCH["l2"](ETH_PROTOS[p[1]]))]
     except KeyError:
-        return [
+        p[0] = [
             DISPATCH["generic"](
                 frags=[
                     DISPATCH["ip"](),
-                    DISPATCH["l3"](match_object=p[1]),
+                    DISPATCH["l3"](match_object=IP_PROTOS[p[1]]),
                 ]
             )]
 
