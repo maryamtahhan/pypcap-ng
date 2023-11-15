@@ -50,31 +50,43 @@ def p_negation(p):
     p[0] = DISPATCH["not"](p[2])
 
 def p_term(p):   
-    '''term    : head id
+    '''term     : hterm
+                | qterm
                 | pname
                 | other
     '''
-    if len(p) == 3:
-        p[2].add_quals(p[1])
-        p[0] = p[2]
-    else:
-        p[0] = p[1]
+    p[0] = p[1]
+
+def p_hterm(p):   
+    '''hterm    : head id
+    '''
+    p[0] = DISPATCH["and"](left=p[1], right=p[2])
+
+
+def p_qterm(p):   
+    '''qterm    : quals id
+    '''
+    p[2].add_quals(p[1])
+    p[0] = p[2]
+
 
 def p_head(p):
-    '''head     : pname dqual aqual
-	            | pname dqual
-	            | pname aqual
-                | dqual aqual
-                | dqual
-                | aqual
+    '''head     : pname quals
 	            | pname PROTO
 	            | pname PROTOCHAIN
                 | pname GATEWAY
                 |
     '''
-    p[0] = set(p[1:])
-        
+    p[0] = p[1]
 
+def p_quals(p):
+    '''quals    : dqual aqual
+                | dqual
+                | aqual
+    '''
+    p[0] = p[1]
+
+       
 def p_pname(p):
     '''pname    : LINK
                 | IP
@@ -139,7 +151,7 @@ def p_dqual(p):
              | srcordst
              | srcanddst
     '''
-    p[0] = p[1]
+    p[0] = set(p[1:])
 
 def p_srcordst(p):
     '''srcordst :  SRC OR DST
