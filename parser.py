@@ -29,6 +29,7 @@ def p_operators(p):
                   | negation
                   | brackets
                   | term
+                  | comparisons
     '''
     p[0] = p[1]
 
@@ -40,6 +41,17 @@ def p_binary_operators(p):
         p[0] = DISPATCH["or"](left=p[1], right=p[3])
     else:
         p[0] = DISPATCH["and"](left=p[1], right=p[3])
+
+def p_comparisons(p):
+    '''comparisons : arth LESS arth
+                  | arth GREATER arth
+                  | arth GEQ arth
+                  | arth LEQ arth
+                  | arth NEQ arth
+                  | arth EQUAL arth
+    '''
+    p[0] = DISPATCH["ar_comp"](op=p[2],left=p[1],right=p[3])
+
 
 def p_brackets(p):
     '''brackets  : LPAREN expression RPAREN
@@ -61,7 +73,6 @@ def p_term(p):
 def p_hterm(p):   
     '''hterm    : head qterm
     '''
-    p[2].drop_frags()
     p[0] = DISPATCH["and"](left=p[1], right=p[2])
 
 
@@ -201,24 +212,96 @@ def p_bmcast(p):
 def p_aqual(p):
     '''aqual : HOST
              | NET
-             | PORT
-             | PORTRANGE
              | GATEWAY
     '''
     p[0] = p[1]
 
 def p_id(p):
-    '''id : num
-          | addr
+    '''id : addr
           | hostname
           | net
+          | pload
+          | pnum
     '''
     p[0] = p[1]
 
-def p_num(p):
-    '''num : NUM 
+def p_pnum(p):
+    '''pnum : PORT num
     '''
-    pass
+    p[0] = DISPATCH["port"](frags=[p[2]])
+
+def p_num(p):
+    '''num : arth
+    '''
+    p[0]=p[1]
+
+def p_pload(p):
+    '''pload    : pname peek
+    '''
+    # this needs to be redone - derstroy pname and
+    # push it as quals into peek
+    #p[0] = DISPATCH["generic"](frags=[p[1], p[2]])
+
+    p[1].append(p[2])
+
+    p[0] = DISPATCH["generic"](frags=p[1])
+    
+
+def p_peek(p):
+    '''peek    : LBRA arth SEMI NUM RBRA
+               | peekw 
+               | peek_comp
+    '''
+    if len(p) == 6:
+        p[0] = DISPATCH["ar_load"](loc=p[2], size=p[4])
+    else:
+        p[0] = p[1]
+
+def p_peekw(p):
+    '''peekw :  LBRA arth RBRA
+    '''
+    p[0] = DISPATCH["ar_load"](loc=p[2])
+
+def p_peek_comp(p):
+    '''peek_comp  : LBRA pload RBRA
+                  |  LBRA pload SEMI NUM RBRA
+    '''
+
+    print("At index load")
+
+    if len(p) == 4:
+        p[0] = DISPATCH["index_load"](frags=p[2])
+    else:
+        p[0] = DISPATCH["index_load"](frags=p[2], size=p[4])
+        
+
+
+def p_arth(p):
+    '''arth     : NUM
+                | narth
+    '''
+    if isinstance(p[1], int) or isinstance(p[1], str):
+        p[0] = DISPATCH["immediate"](match_object=int(p[1]))
+    else:
+        p[0] = p[1]
+
+def p_narth(p):
+    '''narth :  pload
+                | arth ADD arth
+                | arth SUB arth
+                | arth MUL arth
+                | arth DIV arth
+                | arth MOD arth
+                | arth A_AND arth
+                | arth A_OR arth
+                | arth XOR arth
+                | arth LSH arth
+                | arth RSH arth
+    '''
+    if len(p) == 2:
+        p[0] = p[1]
+    else:
+        p[0] = DISPATCH["ar_op"](op=p[2], left=p[1], right=p[3])
 
 def p_addr(p):
     '''addr : addr4
@@ -259,5 +342,5 @@ def p_hostname(p):
 
 
 lexer = lex.lex(module=lexer_defs)
-PARSER = yacc.yacc()
+PARSER = yacc.yacc(debug=1)
 

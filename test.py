@@ -30,14 +30,11 @@ def main():
 
     print("compile")
 
-    parsed.compile()
+    print(json.dumps(parsed, cls=ProgramEncoder, indent=4))
+
+    parsed.compile(None)
     counter = 0
-    for inst in parsed.get_code():
-        print("{} {}".format(counter, inst))
-        counter += 1
-
-
-
+    
     print("all_refs")
 
     parsed.resolve_refs()

@@ -116,11 +116,13 @@ reserved = {
 }
 
 tokens = [
+    "ADD", "SUB", "MUL", "DIV", "MOD", "A_AND", "A_OR", "XOR", 
     'LESS', 'GREATER',
     'GEQ', 'LEQ', 'NEQ',
     'LSH', 'RSH',
     'LPAREN', 'RPAREN',
     'NUM', 'ADDR_V4', 'ADDR_V6', 'STRING_LITERAL', 'NET_V4', 'NET_V6',
+    'LBRA', 'RBRA', 'SEMI', 'EQUAL',
 ] + list(reserved.values())
 
 t_LESS = r'<'
@@ -128,11 +130,24 @@ t_GREATER = r'>'
 t_GEQ = r'>='
 t_LEQ = r'<='
 t_NEQ = r'!='
-t_LSH = r'<<'
-t_RSH = r'>>'
+t_EQUAL = r'=='
 
 t_LPAREN = r'\('
 t_RPAREN = r'\)'
+t_LBRA = r'\['
+t_RBRA = r'\]'
+t_SEMI = r':'
+
+t_ADD = r"\+"
+t_SUB = r"-"
+t_MUL = r"\*"
+t_DIV = r"\/"
+t_MOD = "\%"
+t_A_AND = "\&"
+t_A_OR = "\|"
+t_XOR =  "\^"
+t_LSH = r'<<'
+t_RSH = r'>>'
 
 def t_not_alternative(t):
     r'\!'

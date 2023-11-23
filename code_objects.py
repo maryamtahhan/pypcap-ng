@@ -119,6 +119,7 @@ class AbstractProgram():
         self.code = []
         self.loc = COMPILER_STATE.get_loc()
         self.attribs["quals"] = set()
+        self.result = None # evaluation result - catch constant expressions
 
     def drop_frags(self):
         '''Drop any subprograms created by default or added later -
@@ -146,13 +147,17 @@ class AbstractProgram():
         '''Resulting code dump'''
         for frag in self.frags:
             frag.add_quals(quals)
-        self.attribs["quals"] = self.attribs["quals"] | quals
+        try:
+            self.attribs["quals"] = self.attribs["quals"] | quals
+        except TypeError:
+            self.attribs["quals"] = self.attribs["quals"] | set([quals])
+            
 
-    def compile(self):
+    def compile(self, branch_state):
         '''Compile the program'''
         if not self.compiled:
             for frag in self.frags:
-                frag.compile()
+                frag.compile(branch_state)
             self.compiled = True
 
     def set_parent(self):
@@ -175,6 +180,11 @@ class AbstractProgram():
     def labels(self):
         '''Labels for this piece of code'''
         return self.attribs.get("labels")
+
+    @property
+    def name(self):
+        '''Frag list used to build this piece of code'''
+        return self.attribs.get("name")
 
     @property
     def frags(self):
