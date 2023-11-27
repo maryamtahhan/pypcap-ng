@@ -680,12 +680,14 @@ class ProgIPv4(CBPFProgram):
             return
 
         for qual in self.quals:
-            try:
-                location = branch_state.offset + self.offset + IP[qual]
-            except KeyError:
-                pass
-            if location is not None:
-                break
+            # Use only simple qualifiers. Skip protos, vlans, etc 
+            if isinstance(qual, str):
+                try:
+                    location = branch_state.offset + self.offset + IP[qual]
+                except KeyError:
+                    pass
+                if location is not None:
+                    break
         if location is None:
             raise ValueError(f"Invalid address type specifier {self.quals}")
 
