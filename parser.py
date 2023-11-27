@@ -145,16 +145,20 @@ def p_pname(p):
                 | NETBEUI
                 | RADIO
 '''
+    # protos with known header computations
     try:
-        p[0] = [DISPATCH["generic"](frags=DISPATCH["l2"](ETH_PROTOS[p[1]]))]
+        p[0] = DISPATCH[p[1]]()
     except KeyError:
-        p[0] = [
-            DISPATCH["generic"](
-                frags=[
-                    DISPATCH["ip"](),
-                    DISPATCH["l3"](match_object=IP_PROTOS[p[1]]),
-                ]
-            )]
+        try:
+            p[0] = [DISPATCH["l2"](ETH_PROTOS[p[1]])]
+        except KeyError:
+            p[0] = [
+                DISPATCH["generic"](
+                    frags=[
+                        DISPATCH["ip"](),
+                        DISPATCH["l3"](match_object=IP_PROTOS[p[1]]),
+                    ]
+                )]
 
 def p_dqual(p):
     '''dqual : SRC
@@ -168,7 +172,7 @@ def p_dqual(p):
              | srcordst
              | srcanddst
     '''
-    p[0] = set(p[1:])
+    p[0] = p[1:]
 
 def p_srcordst(p):
     '''srcordst :  SRC OR DST
@@ -242,9 +246,9 @@ def p_pload(p):
     # push it as quals into peek
     #p[0] = DISPATCH["generic"](frags=[p[1], p[2]])
 
-    p[1].append(p[2])
+    p[2].add_quals(p[1])
 
-    p[0] = DISPATCH["generic"](frags=p[1])
+    p[0] = p[2]
     
 
 def p_peek(p):
@@ -266,8 +270,6 @@ def p_peek_comp(p):
     '''peek_comp  : LBRA pload RBRA
                   |  LBRA pload SEMI NUM RBRA
     '''
-
-    print("At index load")
 
     if len(p) == 4:
         p[0] = DISPATCH["index_load"](frags=p[2])

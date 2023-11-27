@@ -163,7 +163,7 @@ def t_addr_net_v4(t):
     return t
 
 def t_addr_net_v6(t):
-    r'([A-F0-9]{0,4}:){1,7}[A-F0-9]{1,4}(\/\d+){0,1}'
+    r'((?:[A-F0-9]{1,4}:){7}[A-F0-9]{1,4})(\/\d+){0,1}'
     if t.value.find('/') > 0:
         t.type = 'NET_V6'
     else:

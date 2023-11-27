@@ -104,12 +104,8 @@ class AbstractProgram():
 
         if attribs is not None:
             self.attribs = attribs.copy()
-            try:
-                self.attribs["quals"] = set(attribs["quals"])
-            except KeyError:
-                pass
             return
-
+     
         self.attribs = dict()
         self.frags = frags
         self.frag_refs_resolved = False
@@ -118,7 +114,7 @@ class AbstractProgram():
         self.set_parent()
         self.code = []
         self.loc = COMPILER_STATE.get_loc()
-        self.attribs["quals"] = set()
+        self.attribs["quals"] = []
         self.result = None # evaluation result - catch constant expressions
 
     def drop_frags(self):
@@ -144,14 +140,15 @@ class AbstractProgram():
         return code
 
     def add_quals(self, quals):
-        '''Resulting code dump'''
-        for frag in self.frags:
-            frag.add_quals(quals)
-        try:
-            self.attribs["quals"] = self.attribs["quals"] | quals
-        except TypeError:
-            self.attribs["quals"] = self.attribs["quals"] | set([quals])
-            
+        '''Add qualifiers'''
+
+        if not isinstance(quals, list):
+            quals = [quals]
+
+        for qual in quals:
+            if not qual in self.attribs["quals"]:
+                self.attribs["quals"].append(qual)
+
 
     def compile(self, branch_state):
         '''Compile the program'''

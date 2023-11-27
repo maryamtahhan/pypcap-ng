@@ -58,7 +58,7 @@ class CBPFCompilerState():
         for index in range(0,16):
             self.regfile.append(True)
         self.offset = 0
-        self.quals = set()
+        self.quals = []
 
     def next_free_reg(self):
         '''Next available reg in the scratch space'''
@@ -72,6 +72,15 @@ class CBPFCompilerState():
         '''Release stashed reg back for use'''
         self.regfile[reg] = True
 
+    def add_qual(self, quals):
+        '''Add qualifiers'''
+
+        if not isinstance(quals, list):
+            quals = [quals]
+
+        for qual in quals:
+            if not qual in self.quals:
+                self.quals.append(qual)
 
 
 SIZE_MODS = [None, "b", "h", None, ""]
@@ -356,6 +365,11 @@ class CBPFProgram(AbstractProgram):
 
         super().compile(branch_state)
 
+        try:
+            branch_state.add_qual(f"{self.name}.{self.match_object}")
+        except KeyError:
+            pass
+
         for frag in self.frags:
             frag.update_labels()
 
@@ -363,6 +377,25 @@ class CBPFProgram(AbstractProgram):
             self.frags[index].replace_value(
                 NEXT_MATCH, self.frags[index + 1].get_start_label())
 
+
+    def compile_offset(self, branch_state=None):
+        '''Compile the code and mark it as compiled'''
+
+        if branch_state is None:
+            branch_state = CBPFCompilerState()
+
+        offset = 0
+
+        if self.quals is not None:
+            for qual in self.quals:
+                # this allows us to mix simple string qualifiers
+                # and pieces of code which return an offset
+                if isinstance(qual, CBPFProgram):
+                    incr = qual.compile_offset(branch_state)
+                    if incr is not None:
+                        offset += incr
+
+        return offset
 
 
     def set_on_success(self, on_success, last_frag=False):
@@ -484,7 +517,6 @@ class ProgL2(CBPFProgram):
 
         super().compile(branch_state)
         branch_state.offset = ETHER["size"]
-        branch_state.quals = branch_state.quals | set([f"{self.name}.{self.match_object}"])
 
         if isinstance(self.match_object, str):
             self.add_code([
@@ -496,6 +528,12 @@ class ProgL2(CBPFProgram):
                 LD(ETHER["proto"] + self.offset, size=2, mode=1),
                 JEQ([self.match_object, self.on_success, self.on_failure], mode=7),
             ])
+
+    def compile_offset(self, branch_state=None):
+        '''L2 offset'''
+        super().compile_offset(branch_state)
+
+        return ETHER["size"]
 
 
 class Prog8021Q(CBPFProgram):
@@ -509,7 +547,6 @@ class Prog8021Q(CBPFProgram):
     def compile(self, branch_state=None):
 
         super().compile(branch_state)
-        branch_state.quals = branch_state.quals | set([f"{self.name}.{self.match_object}"])
 
         branch_state.offset = ETHER["size"] + 4
         self.add_code([
@@ -517,6 +554,10 @@ class Prog8021Q(CBPFProgram):
             AND(0x3F, mode=4),
             JEQ([self.match_object, self.on_success, self.on_failure], mode=7)
         ])
+
+    def compile_offset(self, branch_state=None):
+        '''802.1q offset'''
+        return super().compile_offset(branch_state) + 4
 
 
 class ProgL3(CBPFProgram):
@@ -532,7 +573,6 @@ class ProgL3(CBPFProgram):
         '''Compile the code'''
 
         super().compile(branch_state)
-        branch_state.quals = branch_state.quals | set([f"{self.name}.{self.match_object}"])
         self.add_code([
             LD(self.offset + branch_state.offset + IP["proto"], size=1, mode=1),
             JEQ([self.match_object, self.on_success, self.on_failure], mode=7),
@@ -551,20 +591,11 @@ class ProgIP(CBPFProgram):
         super().__init__(frags=[ProgL2(match_object="ip", offset=offset)], attribs=attribs)
         self.attribs["name"] = "ip"
 
-class ProgIPPayload(CBPFProgram):
-    '''Basic match on IP - any shape or form,
-       added before matching on address, proto, etc.
-    '''
-    def __init__(self, attribs=None, offset=0):
-        super().__init__(frags=[ProgIP(offset=offset)], attribs=attribs)
-        self.attribs["name"] = "ip_payload"
-
-    def compile(self, branch_state=None):
-        '''Compile the code'''
-
-        super().compile(branch_state)
+    def compile_offset(self, branch_state=None):
+        '''Compile offset past IP Headers'''
+        super().compile_offset(branch_state)
         self.add_code([
-            LD([self.offset + branch_state.offset], size=1, mode=5, reg="x")
+            LD([super().compile_offset(branch_state)], size=1, mode=5, reg="x")
         ])
 
 class ProgPort(CBPFProgram):
@@ -572,10 +603,9 @@ class ProgPort(CBPFProgram):
        added before matching on address, proto, etc.
     '''
     def __init__(self, match_object=None, frags=None, attribs=None, offset=0):
-        if frags is None:
-            frags = []
-        frags.append(ProgIPPayload(offset=offset))
-        self.using_stash = False
+
+        if frags is None and attribs is None:
+            frags = [ProgIP()]
 
         super().__init__(match_object=match_object, frags=frags, attribs=attribs)
         self.attribs["name"] = "port"
@@ -585,14 +615,15 @@ class ProgPort(CBPFProgram):
 
         super().compile(branch_state)
 
-        code = []
-
-        ######
+        code = [
+            LD([branch_state.offset], size=1, mode=5, reg="x")
+        ]
 
         if self.frags[0].result is None:
             self.stashed_in = branch_state.next_free_reg()
             self.add_code([ST([self.stashed_in], mode=3)])
-            self.using_stash=True
+
+        self.compile_offset(branch_state)
 
         if "src" in self.quals:
             code.append(
@@ -602,14 +633,14 @@ class ProgPort(CBPFProgram):
             code.append(
                 LD([branch_state.offset + 2], size=2, mode=2),
             )
+
         if self.frags[0].result is None:
-            code.append(JEQ([self.stashed_in, self.on_success, self.on_failure], mode=3))
+            code.append(LD([self.stashed_in], reg="x", mode=3))
+            code.append(JEQ([self.on_success, self.on_failure], mode=8))
+            branch_state.release(self.stashed_in)
         else:
             code.append(JEQ([self.frags[0].result, self.on_success, self.on_failure], mode=7))
         self.add_code(code)
-
-        if self.using_stash:
-            branch_state.release(self.left.stashed_in)
 
 class ProgIPv4(CBPFProgram):
     '''Basic match on v4 address or network.
@@ -630,8 +661,8 @@ class ProgIPv4(CBPFProgram):
         if "srcordst" in self.quals or "srcanddst" in self.quals:
             left = ProgIPv4(match_object=self.match_object, offset=self.offset, add_ip_check=False)
             right = ProgIPv4(match_object=self.match_object, offset=self.offset, add_ip_check=False)
-            left.add_quals(set(["src"]))
-            right.add_quals(set(["dst"]))
+            left.add_quals("src")
+            right.add_quals("dst")
             if "srcordst" in self.quals:
                 self.frags.append(ProgOR(left=left, right=right))
             else:
@@ -749,9 +780,13 @@ class ProgLoad(CBPFProgram):
 
     def compile(self, branch_state=None):
         '''Compile arithmetics'''
+
         super().compile(branch_state)
+
+        super().compile_offset(branch_state)
+
         if isinstance(self.attribs["loc"], Immediate):
-            self.add_code([LD([self.attribs["loc"].attribs["match_object"] + branch_state.offset], size=self.attribs["size"], mode=1)])
+           self.add_code([LD([self.attribs["loc"].attribs["match_object"] + branch_state.offset], size=self.attribs["size"], mode=1)])
 
 class ProgIndexLoad(CBPFProgram):
     '''Perform arithmetic operations.
@@ -953,13 +988,7 @@ class ProgramEncoder(json.JSONEncoder):
 
     def default(self, o):
         if isinstance(o, CBPFProgram):
-            attribs = o.attribs.copy()
-            attribs["quals"] = [*attribs["quals"]]
-            try:
-                attribs["labels"] = [*attribs["labels"]]
-            except KeyError:
-                pass
-            return attribs
+            return o.attribs.copy()
         return json.JSONEncoder.default(self, o)
 
 def loads_hook(obj):
