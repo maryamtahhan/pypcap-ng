@@ -73,7 +73,8 @@ def p_term(p):
 def p_hterm(p):   
     '''hterm    : head qterm
     '''
-    p[0] = DISPATCH["and"](left=p[1], right=p[2])
+    p[2].add_frags(p[1])
+    p[0] = p[2]
 
 
 def p_qterm(p):   
@@ -93,7 +94,7 @@ def p_head(p):
     if len(p) == 2:
         p[0] = p[1]
     elif len(p) == 2:
-        raise TypeError("pname PROTO not supported")
+        raise TypeError("pname PROTO not yet supported")
         
 
 def p_quals(p):
@@ -147,7 +148,7 @@ def p_pname(p):
 '''
     # protos with known header computations
     try:
-        p[0] = DISPATCH[p[1]]()
+        p[0] = [DISPATCH[p[1]]()]
     except KeyError:
         try:
             p[0] = [DISPATCH["l2"](ETH_PROTOS[p[1]])]
@@ -246,7 +247,9 @@ def p_pload(p):
     # push it as quals into peek
     #p[0] = DISPATCH["generic"](frags=[p[1], p[2]])
 
-    p[2].add_quals(p[1])
+    p[2].add_frags(p[1])
+    p[2].add_frags(DISPATCH["compute_offset"](frags=p[1]))
+    p[2].use_offset = True
 
     p[0] = p[2]
     

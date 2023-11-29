@@ -115,8 +115,14 @@ class CBPFCode(AbstractCode):
 
         res += "\t" + self.code
 
+
         if self.mode is not None:
-            res += "\t" + FORMATS[self.mode].format(*self.values)
+            try:
+                res += "\t" + FORMATS[self.mode].format(*self.values)
+            except TypeError:
+                res += f"cannot do {self.mode} {self.values}"
+            except ValueError:
+                res += f"incorrect argument format for {self.mode} {self.values}"
         return res
 
     def check_mode(self, mode, mask=None):
@@ -320,6 +326,9 @@ class CBPFProgram(AbstractProgram):
 
         super().__init__(frags=frags, label=label, attribs=attribs)
         self.code = []
+        self.offset_code = []
+        self.compiled_offsets = False
+        self.use_offset = False
         self.ext_label = f"__ext__{self.loc}"
         if attribs is None:
             self.attribs.update({
@@ -357,6 +366,10 @@ class CBPFProgram(AbstractProgram):
         code[0].add_label(self.ext_label)
         self.code.extend(code)
 
+    def add_offset_code(self, code):
+        '''Add code and update jump label in last frag'''
+        self.offset_code.extend(code)
+
     def compile(self, branch_state=None):
         '''Compile the code and mark it as compiled'''
 
@@ -378,25 +391,18 @@ class CBPFProgram(AbstractProgram):
                 NEXT_MATCH, self.frags[index + 1].get_start_label())
 
 
-    def compile_offset(self, branch_state=None):
+    def compile_offsets(self, branch_state=None):
         '''Compile the code and mark it as compiled'''
-
-        if branch_state is None:
-            branch_state = CBPFCompilerState()
-
-        offset = 0
-
-        if self.quals is not None:
-            for qual in self.quals:
-                # this allows us to mix simple string qualifiers
-                # and pieces of code which return an offset
-                if isinstance(qual, CBPFProgram):
-                    incr = qual.compile_offset(branch_state)
-                    if incr is not None:
-                        offset += incr
-
-        return offset
-
+        if not self.compiled_offsets:
+            try:
+                # top level
+                for frag in self.attribs["offset_frags"]:
+                    frag.compile_offsets(branch_state)
+            except KeyError:
+                for frag in self.frags:
+                    frag.compile_offsets(branch_state)
+            self.compiled_offsets = True
+        
 
     def set_on_success(self, on_success, last_frag=False):
         '''Set jump on true.'''
@@ -455,6 +461,21 @@ class CBPFProgram(AbstractProgram):
         if self.frags[-1] == item:
             return self.parent.get_next_match(self)
         return self.frags[self.frags.index(item) + 1].get_start_label()
+
+
+    def get_offset_code(self):
+        '''Get offset specific code'''
+        code = []
+        try:
+            # top level
+            for frag in self.attribs["offset_frags"]:
+                code.extend(frag.get_offset_code())
+        except KeyError:
+            for frag in self.frags:
+                code.extend(frag.get_offset_code())
+        code.extend(self.offset_code)
+        return code
+        
 
     def resolve_refs(self):
         '''Second pass'''
@@ -529,9 +550,9 @@ class ProgL2(CBPFProgram):
                 JEQ([self.match_object, self.on_success, self.on_failure], mode=7),
             ])
 
-    def compile_offset(self, branch_state=None):
+    def compile_offsets(self, branch_state=None):
         '''L2 offset'''
-        super().compile_offset(branch_state)
+        super().compile_offsets(branch_state)
 
         return ETHER["size"]
 
@@ -555,9 +576,9 @@ class Prog8021Q(CBPFProgram):
             JEQ([self.match_object, self.on_success, self.on_failure], mode=7)
         ])
 
-    def compile_offset(self, branch_state=None):
+    def compile_offsets(self, branch_state=None):
         '''802.1q offset'''
-        return super().compile_offset(branch_state) + 4
+        return super().compile_offsets(branch_state) + 4
 
 
 class ProgL3(CBPFProgram):
@@ -591,12 +612,33 @@ class ProgIP(CBPFProgram):
         super().__init__(frags=[ProgL2(match_object="ip", offset=offset)], attribs=attribs)
         self.attribs["name"] = "ip"
 
-    def compile_offset(self, branch_state=None):
+    def compile_offsets(self, branch_state=None):
         '''Compile offset past IP Headers'''
-        super().compile_offset(branch_state)
-        self.add_code([
-            LD([super().compile_offset(branch_state)], size=1, mode=5, reg="x")
+        super().compile_offsets(branch_state)
+        print(branch_state.offset)
+        self.add_offset_code([
+            LD([branch_state.offset], size=1, mode=5, reg="x")
         ])
+
+class ProgTCP(CBPFProgram):
+    '''Basic match on IP - any shape or form,
+       added before matching on address, proto, etc.
+    '''
+    def __init__(self, attribs=None, offset=0):
+        super().__init__(frags=[ProgIP(offset=offset), ProgL3(match_object=IP_PROTOS["tcp"], offset=offset)], attribs=attribs)
+        self.attribs["name"] = "tcp"
+
+    def compile_offsets(self, branch_state=None):
+        '''Compile offset past IP Headers'''
+        super().compile_offsets(branch_state)
+
+        self.add_offset_code([
+            LD([branch_state.offset + 12], size=1, mode=2),
+            RSH([2], mode=4),
+            ADD([], mode=0),
+            TAX(),
+        ])
+
 
 class ProgPort(CBPFProgram):
     '''Basic match on IP - any shape or form,
@@ -623,7 +665,7 @@ class ProgPort(CBPFProgram):
             self.stashed_in = branch_state.next_free_reg()
             self.add_code([ST([self.stashed_in], mode=3)])
 
-        self.compile_offset(branch_state)
+        self.compile_offsets(branch_state)
 
         if "src" in self.quals:
             code.append(
@@ -736,8 +778,10 @@ class ProgOR(CBPFProgram):
         '''Compile OR - inverse true and false'''
 
         old_state = branch_state.quals.copy()
+        offset = branch_state.offset
         self.left.compile(branch_state)
         branch_state.quals = old_state
+        branch_state.offset = offset
         self.right.compile(branch_state)
 
         self.frags[0].replace_value(self.frags[1].get_start_label(), NEXT_MATCH)
@@ -768,6 +812,45 @@ COMP_TABLE = {
     "<=" : JLE
 }
 
+class ProgOffset(CBPFProgram):
+    '''Perform computation of offset to payload
+    '''
+    def __init__(self, frags=None, attribs=None):
+        super().__init__(frags=frags, attribs=attribs)
+        self.attribs["name"] = "compute_offset"
+        self.attribs["offset_frags"] = frags
+        self.attribs["frags"] = []
+
+
+    def compile(self, branch_state=None):
+        '''We compile offset code instead of the normal
+           match logic.
+        '''
+
+        super().compile(branch_state)
+        super().compile_offsets(branch_state)
+
+        code = self.get_offset_code()
+        if len(code) == 0:
+            # our relocation mechanism breaks if a prog does not
+            # generate any code and has labels
+            code.append(ADD([0], mode=4))
+
+
+        # NOP - to ensure labels are computed correctly
+        self.add_code(code)
+
+
+COMP_TABLE = {
+    "<" : JLT,
+    ">" : JGT,
+    "==" : JEQ,
+    "!=" : JNEQ,
+    ">=" : JGE,
+    "<=" : JLE
+}
+
+
 class ProgLoad(CBPFProgram):
     '''Load a value from packet address
     '''
@@ -785,10 +868,13 @@ class ProgLoad(CBPFProgram):
 
         super().compile(branch_state)
 
-        super().compile_offset(branch_state)
+        super().compile_offsets(branch_state)
 
         if isinstance(self.attribs["loc"], Immediate):
-           self.add_code([LD([self.attribs["loc"].attribs["match_object"] + branch_state.offset], size=self.attribs["size"], mode=1)])
+            if self.use_offset:
+               self.add_code([LD([self.attribs["loc"].attribs["match_object"] + branch_state.offset], size=self.attribs["size"], mode=2)])
+            else:
+               self.add_code([LD([self.attribs["loc"].attribs["match_object"] + branch_state.offset], size=self.attribs["size"], mode=1)])
 
 class ProgIndexLoad(CBPFProgram):
     '''Perform arithmetic operations.
@@ -1010,6 +1096,8 @@ JUMPTABLE = {
     "ip":ProgIP,
     "l2":ProgL2,
     "l3":ProgL3,
+    "tcp":ProgTCP,
+#    "udp":ProgUDP,
     "port":ProgPort,
     "ipv4":ProgIPv4,
     "not":ProgNOT,
@@ -1023,5 +1111,6 @@ JUMPTABLE = {
     "index_load":ProgIndexLoad,
     "immediate":Immediate,
     "stash":StashResult,
-    "tax":ProgTAX
+    "tax":ProgTAX,
+    "compute_offset":ProgOffset
 }

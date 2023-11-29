@@ -139,6 +139,12 @@ class AbstractProgram():
         code.extend(self.code)
         return code
 
+    def add_frags(self, frags):
+        '''Add frags'''
+        if not isinstance(frags, list):
+            frags = [frags]
+        self.attribs["frags"].extend(frags)
+
     def add_quals(self, quals):
         '''Add qualifiers'''
 
