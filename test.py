@@ -3,7 +3,8 @@
 from argparse import ArgumentParser
 import parser
 from parsed_tree import LEFT, RIGHT, OP, OBJ, QUALS, OBJTYPE, PROTO
-from bpf_objects import finalize, ProgramEncoder, loads_hook
+from code_objects import finalize, ProgramEncoder, loads_hook
+from bpf_objects import dispatcher, CBPFCompilerState
 import json
 
 
@@ -28,11 +29,14 @@ def main():
 
     parsed = finalize(parser.PARSER.parse(args["expr"]))
 
-    print("compile")
 
     print(json.dumps(parsed, cls=ProgramEncoder, indent=4))
 
-    parsed.compile(None)
+    parsed.add_helper(dispatcher)
+
+    print("compile")
+
+    parsed.compile(CBPFCompilerState())
     counter = 0
     for inst in parsed.get_code():
         print("{} {}".format(counter, inst))
@@ -47,7 +51,6 @@ def main():
     for inst in parsed.get_code():
         print("{} {}".format(counter, inst))
         counter += 1
-
 
 
 

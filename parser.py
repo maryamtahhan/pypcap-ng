@@ -15,7 +15,7 @@ import ply.lex as lex
 import ply.yacc as yacc
 from lexer_defs import tokens
 import lexer_defs
-from dispatcher import DISPATCH
+import code_objects
 from header_constants import ETH_PROTOS, IP_PROTOS
 
 precedence = (
@@ -38,9 +38,9 @@ def p_binary_operators(p):
                   | expression OR expression
     '''
     if p[2].lower() == 'or':
-        p[0] = DISPATCH["or"](left=p[1], right=p[3])
+        p[0] = code_objects.ProgOR(left=p[1], right=p[3])
     else:
-        p[0] = DISPATCH["and"](left=p[1], right=p[3])
+        p[0] = code_objects.ProgAND["and"](left=p[1], right=p[3])
 
 def p_comparisons(p):
     '''comparisons : arth LESS arth
@@ -50,7 +50,7 @@ def p_comparisons(p):
                   | arth NEQ arth
                   | arth EQUAL arth
     '''
-    p[0] = DISPATCH["ar_comp"](op=p[2],left=p[1],right=p[3])
+    p[0] = code_objects.ProgComp(op=p[2],left=p[1],right=p[3])
 
 
 def p_brackets(p):
@@ -60,7 +60,7 @@ def p_brackets(p):
 
 def p_negation(p):
     '''negation  : NOT expression'''
-    p[0] = DISPATCH["not"](p[2])
+    p[0] = code_objects.ProgNOT(p[2])
 
 def p_term(p):   
     '''term     : hterm
@@ -147,19 +147,20 @@ def p_pname(p):
                 | RADIO
 '''
     # protos with known header computations
-    try:
-        p[0] = [DISPATCH[p[1]]()]
-    except KeyError:
+    if p[1] == "tcp":
+        p[0] = code_objects.ProgTCP()
+    elif p[1] == "udp":
+        p[0] == code_objects.ProgUDP()
+    else:
         try:
-            p[0] = [DISPATCH["l2"](ETH_PROTOS[p[1]])]
+            p[0] = code_objects.ProgL2(ETH_PROTOS[p[1]])
         except KeyError:
-            p[0] = [
-                DISPATCH["generic"](
-                    frags=[
-                        DISPATCH["ip"](),
-                        DISPATCH["l3"](match_object=IP_PROTOS[p[1]]),
-                    ]
-                )]
+            p[0] = AbstractProgram(
+                        frags=[
+                            code_objects.ProgIP(),
+                            code_objects.ProgL3(match_object=IP_PROTOS[p[1]]),
+                        ]
+                    )
 
 def p_dqual(p):
     '''dqual : SRC
@@ -248,7 +249,7 @@ def p_pload(p):
     #p[0] = DISPATCH["generic"](frags=[p[1], p[2]])
 
     p[2].add_frags(p[1])
-    p[2].add_frags(DISPATCH["compute_offset"](frags=p[1]))
+    p[2].add_frags(code_objects.ProgOffset(frags=p[1]))
     p[2].use_offset = True
 
     p[0] = p[2]
@@ -260,14 +261,14 @@ def p_peek(p):
                | peek_comp
     '''
     if len(p) == 6:
-        p[0] = DISPATCH["ar_load"](loc=p[2], size=p[4])
+        p[0] = code_objects.ProgLoad(loc=p[2], size=p[4])
     else:
         p[0] = p[1]
 
 def p_peekw(p):
     '''peekw :  LBRA arth RBRA
     '''
-    p[0] = DISPATCH["ar_load"](loc=p[2])
+    p[0] = code_objects.ProgLoad(loc=p[2])
 
 def p_peek_comp(p):
     '''peek_comp  : LBRA pload RBRA
@@ -275,9 +276,9 @@ def p_peek_comp(p):
     '''
 
     if len(p) == 4:
-        p[0] = DISPATCH["index_load"](frags=p[2])
+        p[0] = code_objects.IndexLoad(frags=p[2])
     else:
-        p[0] = DISPATCH["index_load"](frags=p[2], size=p[4])
+        p[0] = code_objects.IndexLoad(frags=p[2], size=p[4])
         
 
 
@@ -286,7 +287,7 @@ def p_arth(p):
                 | narth
     '''
     if isinstance(p[1], int) or isinstance(p[1], str):
-        p[0] = DISPATCH["immediate"](match_object=int(p[1]))
+        p[0] = code_objects.Immediate(match_object=int(p[1]))
     else:
         p[0] = p[1]
 
@@ -306,7 +307,7 @@ def p_narth(p):
     if len(p) == 2:
         p[0] = p[1]
     else:
-        p[0] = DISPATCH["ar_op"](op=p[2], left=p[1], right=p[3])
+        p[0] = code_objects.ProgArOp(op=p[2], left=p[1], right=p[3])
 
 def p_addr(p):
     '''addr : addr4
@@ -317,12 +318,12 @@ def p_addr(p):
 def p_addr4(p):
     '''addr4 : ADDR_V4
     '''
-    p[0] = DISPATCH["ipv4"](p[1])
+    p[0] = code_objects.ProgIPv4(p[1])
 
 def p_addr6(p):
     '''addr6 : ADDR_V6
     '''
-    pass
+    p[0] = code_objects.ProgIPv6(p[1])
 
 def p_net(p):
     '''net  : net4
@@ -333,12 +334,12 @@ def p_net(p):
 def p_net4(p):
     '''net4 : NET_V4
     '''
-    p[0] = DISPATCH["ipv4"](p[1])
+    p[0] = code_objects.ProgIPv4(p[1])
 
 def p_net6(p):
     '''net6 : NET_V6
     '''
-    pass
+    p[0] = code_objects.ProgIPv6(p[1])
 
 def p_hostname(p):
     '''hostname : STRING_LITERAL

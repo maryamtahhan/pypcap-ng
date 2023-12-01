@@ -8,6 +8,15 @@ Compiler backends.
 # Copyright (c) 2023 Cambridge Greys Ltd <anton.ivanov@cambridgegreys.com>
 #
 
+import json
+from header_constants import ETH_PROTOS, IP_PROTOS
+
+NEXT_MATCH = "__next_match"
+LAST_INSN = "__last_insn"
+SUCCESS = "__success"
+FAIL = "__fail"
+
+
 class CompilerState():
     '''Compiler state for use in label generation
        additional L2 offsets.
@@ -100,22 +109,81 @@ class AbstractCode(dict):
 
 class AbstractProgram():
     '''Chunk of code - fragments can be matchers or other programs'''
-    def __init__(self, parent=None, frags=None, label=None, attribs=None):
+    def __init__(self, frags=None, attribs=None, match_object=None):
 
         if attribs is not None:
             self.attribs = attribs.copy()
             return
-     
-        self.attribs = dict()
-        self.frags = frags
-        self.frag_refs_resolved = False
-        self.compiled = False
-        self.parent = parent
-        self.set_parent()
-        self.code = []
+
+        # serializable attributes - must not contain
+        # anything that does not need to go into the json form
+
+        self.attribs = {}
+
+        # unique number used in generating jump labels.
+
         self.loc = COMPILER_STATE.get_loc()
+
+        self.ext_label = f"__ext__{self.loc}"
+        if attribs is None:
+            self.attribs.update({
+                "on_success": NEXT_MATCH,
+                "on_failure": FAIL,
+                "name":"generic",
+            })
+
+            if match_object is not None:
+                self.attribs["match_object"] = match_object
+
+        else:
+            self.attribs = attribs.copy()
+            try:
+                self.frags = attribs["frags"]
+            except KeyError:
+                pass
+
+
+        # list of code fragments which sit under this node in
+        # the hierarchy
+
+        self.frags = frags
+
+        # are references to which frags are next resolved or not
+        # candidate for removal
+
+        self.frag_refs_resolved = False
+
+        # compiled ?
+
+        self.compiled = False
+        self.compiled_offsets = False
+
+        # Code elements. May be different types
+
+        self.code = []
+        self.offset_code = []
+
+
+        # qualifiers which are not protos - src, dst, etc
+
         self.attribs["quals"] = []
-        self.result = None # evaluation result - catch constant expressions
+
+        # evaluation of constant expressions
+
+        self.result = None
+
+        # helper class instances
+
+        self.helpers = []
+
+    def add_helper(self, dispatcher):
+        '''Add a helper class used for compilation, offload, etc.
+           Helper classes take one argument - the "lead" class.
+           Helper classes must offer a compile() method.
+        '''
+        for frag in self.frags:
+            frag.add_helper(dispatcher)
+        self.helpers.append(dispatcher(self))
 
     def drop_frags(self):
         '''Drop any subprograms created by default or added later -
@@ -139,6 +207,37 @@ class AbstractProgram():
         code.extend(self.code)
         return code
 
+    def get_offset_code(self):
+        '''Get offset specific code'''
+        code = []
+        try:
+            # top level
+            for frag in self.attribs["offset_frags"]:
+                code.extend(frag.get_offset_code())
+        except KeyError:
+            for frag in self.frags:
+                code.extend(frag.get_offset_code())
+        code.extend(self.offset_code)
+        return code
+
+    def resolve_refs(self):
+        '''Second pass'''
+
+        code = self.get_code()
+        labels = {}
+
+        for index in range(0, len(code)):
+            for label in code[index].labels:
+                labels[label] = index
+
+        for index in range(0, len(code)):
+            for key, value in labels.items():
+                code[index].resolve_refs(key, value)
+
+        for index in range(0, len(code)):
+            for label in code[index].labels:
+                code[index].labels = set()
+
     def add_frags(self, frags):
         '''Add frags'''
         if not isinstance(frags, list):
@@ -155,29 +254,90 @@ class AbstractProgram():
             if not qual in self.attribs["quals"]:
                 self.attribs["quals"].append(qual)
 
+    def update_labels(self):
+        '''Update code start/end labels.
+           This should be applicable to both offload and bytecode.
+        '''
+        if len(self.code) > 0:
+            self.code[0].add_label(f"__start__{self.loc}")
+            self.code[-1].add_label(f"__end__{self.loc}")
+
+    def add_code(self, code):
+        '''Add code and update jump label in last frag
+           This should be applicable to both offload and bytecode.
+        '''
+        if len(self.frags) > 0:
+            self.frags[-1].replace_value(NEXT_MATCH, self.ext_label)
+        code[0].add_label(self.ext_label)
+        self.code.extend(code)
+
+    def add_offset_code(self, code):
+        '''Add offset specific code.
+           This is bytecode specific and will not work for most
+           offloads. However, it is sufficiently generic to keep here.
+        '''
+        self.offset_code.extend(code)
 
     def compile(self, branch_state):
         '''Compile the program'''
+
         if not self.compiled:
             for frag in self.frags:
                 frag.compile(branch_state)
-            self.compiled = True
 
-    def set_parent(self):
-        '''Set parent for all code fragments.'''
+        for helper in self.helpers:
+            if not helper.compiled:
+                helper.compile(branch_state)
+
         for frag in self.frags:
-            frag.parent = self
-            frag.set_parent()
+            frag.update_labels()
 
-    def replace_value(self, old, new, index=None):
+        for index in range(0, len(self.frags) -1):
+            self.frags[index].replace_value(
+                NEXT_MATCH, self.frags[index + 1].get_start_label())
+
+        self.compiled = True
+
+    def compile_offsets(self, branch_state=None):
+        '''Compile the code and mark it as compiled'''
+        if not self.compiled_offsets:
+            try:
+                # top level
+                for frag in self.attribs["offset_frags"]:
+                    frag.compile_offsets(branch_state)
+            except KeyError:
+                for frag in self.frags:
+                    frag.compile_offsets(branch_state)
+            self.compiled_offsets = True
+            for helper in self.helpers:
+                helper.compile_offsets(branch_state)
+
+
+    def replace_value(self, old, new):
         '''Ask all code fragments to replace a value.
            Let the code fragment internals actually handle it.
-           Ultimately recurses to the replace_value method in 
+           Ultimately recurses to the replace_value method in
            all instructions.
         '''
         for insn in self.get_code():
             insn.replace_value(old, new)
-    
+
+    def get_start_label(self):
+        '''Set start label'''
+        if len(self.frags) > 0:
+            return self.frags[0].get_start_label()
+        return f"__start__{self.loc}"
+
+    @property
+    def offset(self):
+        '''match_object getter'''
+        return self.attribs["offset"]
+
+    @property
+    def match_object(self):
+        '''match_object getter'''
+        return self.attribs["match_object"]
+
 
     @property
     def labels(self):
@@ -209,3 +369,295 @@ class AbstractProgram():
         '''Qualifiers used to build match'''
         return self.attribs.get("quals")
 
+class AbstractHelper():
+    '''Basic helper class'''
+    def __init__(self, expr):
+        self.pcap_obj = expr
+        self.helper_type = "generic"
+        self.compiled = False
+        self.compiled_offsets = False
+
+    def compile(self, compiler_state=None):
+        '''compile all code for the same helper type'''
+        self.compiled = True
+
+    def compile_offsets(self, compiler_state=None):
+        '''compile all code for the same helper type'''
+        self.compiled_offsets = True
+
+
+class ProgSuccess(AbstractProgram):
+    '''Basic match on IP - any shape or form,
+       added before matching on address, proto, etc.
+    '''
+    def __init__(self, attribs=None):
+        super().__init__(attribs=attribs)
+        self.attribs["name"] = "success"
+
+
+class ProgFail(AbstractProgram):
+    '''Basic match on IP - any shape or form,
+       added before matching on address, proto, etc.
+    '''
+    def __init__(self, attribs=None):
+        super().__init__(attribs=attribs)
+        self.attribs["name"] = "fail"
+
+
+class ProgL2(AbstractProgram):
+    '''Basic match on IP - any shape or form,
+       added before matching on address, proto, etc.
+    '''
+    def __init__(self, match_object=None, attribs=None):
+        if attribs is not None:
+            super().__init__(attribs=attribs)
+        else:
+            super().__init__(match_object=match_object)
+            self.attribs["name"] = "l2"
+
+
+class Prog8021Q(AbstractProgram):
+    '''Vlan matcher'''
+    def __init__(self, match_object,  attribs=None):
+        if attribs is not None:
+            super().__init__(attribs=attribs)
+        else:
+            super().__init__(frags=[ProgL2(match_object="qtag")], match_object=match_object)
+
+class ProgL3(AbstractProgram):
+    '''Layer 3 protocol matcher'''
+    def __init__(self, match_object=None, attribs=None):
+        if attribs is not None:
+            super().__init__(attribs=attribs)
+        else:
+            super().__init__(match_object=match_object)
+            self.attribs["name"] = "l3"
+
+
+class ProgIP(AbstractProgram):
+    '''Basic match on IP - any shape or form,
+       added before matching on address, proto, etc.
+    '''
+    def __init__(self, attribs=None):
+        super().__init__(frags=[ProgL2(match_object="ip")], attribs=attribs)
+        self.attribs["name"] = "ip"
+
+class ProgTCP(AbstractProgram):
+    '''Basic match on IP - any shape or form,
+       added before matching on address, proto, etc.
+    '''
+    def __init__(self, attribs=None):
+        super().__init__(frags=[ProgIP(), ProgL3(match_object=IP_PROTOS["tcp"])], attribs=attribs)
+        self.attribs["name"] = "tcp"
+
+class ProgPort(AbstractProgram):
+    '''Basic match on IP - any shape or form,
+       added before matching on address, proto, etc.
+    '''
+    def __init__(self, match_object=None, frags=None, attribs=None):
+
+        if frags is None and attribs is None:
+            frags = [ProgIP()]
+
+        super().__init__(match_object=match_object, frags=frags, attribs=attribs)
+        self.attribs["name"] = "port"
+
+class ProgIPv4(AbstractProgram):
+    '''Basic match on v4 address or network.
+    '''
+    def __init__(self, match_object=None, attribs=None, add_ip_check=True):
+
+        if attribs is not None:
+            super().__init__(attribs=attribs)
+        else:
+            super().__init__(match_object=match_object)
+            if add_ip_check:
+                self.frags = [ProgIP()]
+        self.attribs["name"] = "ipv4"
+
+    def add_quals(self, quals):
+        '''Override add_quals to take care of "interesting" syntax'''
+        super().add_quals(quals)
+        if "srcordst" in self.quals or "srcanddst" in self.quals:
+            left = ProgIPv4(match_object=self.match_object, add_ip_check=False)
+            right = ProgIPv4(match_object=self.match_object, add_ip_check=False)
+            left.add_quals("src")
+            right.add_quals("dst")
+            if "srcordst" in self.quals:
+                self.frags.append(ProgOR(left=left, right=right))
+            else:
+                self.frags.append(ProgAND(left=left, right=right))
+
+class ProgNOT(AbstractProgram):
+    '''Negate the result of all frags.
+    '''
+    def __init__(self, frags=None, attribs=None):
+        # swap on_success and on_failure
+
+        super().__init__(frags=frags, attribs=attribs)
+        self.attribs["name"] = "not"
+
+class ProgOR(AbstractProgram):
+    '''Perform logical OR on left and right frag(s)
+    '''
+    def __init__(self, left=None, right=None, attribs=None):
+        if attribs is None:
+            self.right = AbstractProgram(frags=right)
+            self.left = AbstractProgram(frags=left)
+            super().__init__(frags=[self.left, self.right])
+        else:
+            super().__init__(attribs=attribs)
+            self.left=attribs["frags"][0]
+            self.right=attribs["frags"][1]
+        self.attribs["name"] = "or"
+
+class ProgAND(AbstractProgram):
+    '''Perform logical AND on left and right frag(s)
+    '''
+    def __init__(self, left=None, right=None, attribs=None):
+        if attribs is None:
+            self.right = AbstractProgram(frags=right)
+            self.left = AbstractProgram(frags=left)
+            super().__init__(frags=[self.left, self.right])
+        else:
+            super().__init__(attribs=attribs)
+            self.left=attribs["frags"][0]
+            self.right=attribs["frags"][1]
+
+        self.attribs["name"] = "and"
+
+class ProgLoad(AbstractProgram):
+    '''Load a value from packet address
+    '''
+    def __init__(self, loc=0, size=4, attribs=None):
+        if attribs is None:
+            super().__init__()
+            self.attribs["loc"] = loc
+            self.attribs["size"] = size
+        else:
+            super().__init__(attribs=attribs)
+        self.attribs["name"] = "ar_load"
+
+class ProgIndexLoad(AbstractProgram):
+    '''Perform arithmetic operations.
+    '''
+    def __init__(self, frags=None, size=4, attribs=None):
+        if attribs is None:
+            super().__init__(frags=frags)
+            self.attribs["size"] = size
+        else:
+            super().__init__(attribs=attribs)
+        self.attribs["name"] = "ar_load"
+
+COMPUTE_TABLE = {
+    "+" : lambda x, y: x + y,
+    "-" : lambda x, y: x - y,
+    "*" : lambda x, y: x * y,
+    "/" : lambda x, y: x / y,
+    "%" : lambda x, y: x % y,
+    "&" : lambda x, y: x & y,
+    "|" : lambda x, y: x | y,
+    "^" : lambda x, y: x ^ y,
+    "<<" : lambda x, y: x << y, 
+    ">>" : lambda x, y: x >> y,
+    "<" : lambda x, y: x < y,
+    ">" : lambda x, y: x > y,
+    "==" : lambda x, y: x == y,
+    "!=" : lambda x, y: not x == y,
+    ">=" : lambda x, y: x >= y,
+    "<=" : lambda x, y: x <= y
+}
+
+def compute(left, op, right):
+    '''Dumb calculcator'''
+    return COMPUTE_TABLE[op](left, right)
+
+class ProgOffset(AbstractProgram):
+    '''Perform arithmetic comparisons.
+    '''
+    def __init__(self, frags=None, attribs=None):
+        if attribs is None:
+            super().__init__(frags=frags)
+        else:
+            super().__init__(attribs=attribs)
+        self.attribs["name"] = "compute_offset"
+
+class ProgComp(AbstractProgram):
+    '''Perform arithmetic comparisons.
+    '''
+    def __init__(self, op=None, left=None, right=None, attribs=None):
+        if attribs is None:
+            super().__init__(frags=[left, right])
+            self.attribs["op"] = "op"
+        else:
+            super().__init__(attribs=attribs)
+        self.left = self.frags[0]
+        self.right = self.frags[1]
+        self.attribs["name"] = "ar_comp"
+
+class Immediate(AbstractProgram):
+    '''Fake leaf for immediate ops
+    '''
+    def __init__(self, match_object=None, attribs=None):
+        if attribs is None:
+            super().__init__(match_object=match_object)
+        else:
+            super().__init__(attribs=attribs)
+        self.attribs["name"] = "immediate"
+
+class ProgArOp(AbstractProgram):
+    '''Perform arithmetic operations.
+    '''
+    def __init__(self, op=None, left=None, right=None, attribs=None):
+        if attribs is None:
+            super().__init__(frags=[left, right])
+            self.attribs["op"] = "op"
+        else:
+            super().__init__(attribs=attribs)
+        self.left = self.frags[0]
+        self.right = self.frags[0]
+        self.attribs["name"] = "ar_op"
+
+
+
+class ProgramEncoder(json.JSONEncoder):
+    '''Serializer to JSON'''
+
+    def default(self, o):
+        if isinstance(o, AbstractProgram):
+            return o.attribs.copy()
+        return json.JSONEncoder.default(self, o)
+
+def loads_hook(obj):
+    '''Custom JSON deserializer'''
+    try:
+        return JUMPTABLE[obj["name"]](attribs=obj)
+    except KeyError:
+        return None
+
+
+def finalize(prog):
+    '''Add success and failure return instructions to the end'''
+    return AbstractProgram(frags=[prog, ProgSuccess(), ProgFail()])
+
+JUMPTABLE = {
+    "generic":AbstractProgram,
+    "ip":ProgIP,
+    "l2":ProgL2,
+    "l3":ProgL3,
+    "tcp":ProgTCP,
+#    "udp":ProgUDP,
+    "port":ProgPort,
+    "ipv4":ProgIPv4,
+    "not":ProgNOT,
+    "or":ProgOR,
+    "and":ProgAND,
+    "fail":ProgFail,
+    "success":ProgSuccess,
+    "ar_comp":ProgComp,
+    "ar_op":ProgArOp,
+    "ar_load":ProgLoad,
+    "index_load":ProgIndexLoad,
+    "immediate":Immediate,
+    "compute_offset":ProgOffset
+}

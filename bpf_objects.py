@@ -8,10 +8,10 @@ Compiler backends.
 # Copyright (c) 2023 Cambridge Greys Ltd <anton.ivanov@cambridgegreys.com>
 #
 
+import sys
 import re
-import json
 from header_constants import ETHER, IP, ETH_PROTOS, IP_PROTOS
-from code_objects import AbstractCode, AbstractProgram
+from code_objects import AbstractCode, AbstractHelper, NEXT_MATCH, FAIL, SUCCESS, LAST_INSN, Immediate
 
 
 IPV4_REGEXP = re.compile(r"(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})")
@@ -84,10 +84,6 @@ class CBPFCompilerState():
 
 
 SIZE_MODS = [None, "b", "h", None, ""]
-NEXT_MATCH = "__next_match"
-LAST_INSN = "__last_insn"
-SUCCESS = "__success"
-FAIL = "__fail"
 PARENT_NEXT = "__parent_next"
 
 class CBPFCode(AbstractCode):
@@ -318,117 +314,27 @@ class RET(CBPFCode):
 
 V4_NET_REGEXP = re.compile(r"(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\/(\d{1,2})")
 
-class CBPFProgram(AbstractProgram):
-    '''cBPF variant of AbstractProgram'''
-    def __init__(self, match_object=None, offset=0,
-                on_success=NEXT_MATCH, on_failure=FAIL, frags=None, label=None, update_labels=False,
-                attribs=None):
+class CBPFHelper(AbstractHelper):
+    '''cBPF variant of AbstractHelper'''
+    def __init__(self, pcap_obj):
 
-        super().__init__(frags=frags, label=label, attribs=attribs)
-        self.code = []
-        self.offset_code = []
-        self.compiled_offsets = False
-        self.use_offset = False
-        self.ext_label = f"__ext__{self.loc}"
-        if attribs is None:
-            self.attribs.update({
-                "on_success": on_success,
-                "on_failure": on_failure,
-                "name":"generic",
-                "offset":offset,
-            })
-
-            if match_object is not None:
-                self.attribs["match_object"] = match_object
-
-            if update_labels:
-                if on_success is not None:
-                    self.set_on_success(on_success)
-                if on_failure is not None:
-                    self.set_on_failure(on_failure)
-        else:
-            self.attribs = attribs.copy()
-            try:
-                self.frags = attribs["frags"]
-            except KeyError:
-                pass
-
-    def update_labels(self):
-        '''Update code start/end labels'''
-        if len(self.code) > 0:
-            self.code[0].add_label(f"__start__{self.loc}")
-            self.code[-1].add_label(f"__end__{self.loc}")
-
-    def add_code(self, code):
-        '''Add code and update jump label in last frag'''
-        if len(self.frags) > 0:
-            self.frags[-1].replace_value(NEXT_MATCH, self.ext_label)
-        code[0].add_label(self.ext_label)
-        self.code.extend(code)
-
-    def add_offset_code(self, code):
-        '''Add code and update jump label in last frag'''
-        self.offset_code.extend(code)
-
-    def compile(self, branch_state=None):
-        '''Compile the code and mark it as compiled'''
-
-        if branch_state is None:
-            branch_state = CBPFCompilerState()
-
-        super().compile(branch_state)
-
-        try:
-            branch_state.add_qual(f"{self.name}.{self.match_object}")
-        except KeyError:
-            pass
-
-        for frag in self.frags:
-            frag.update_labels()
-
-        for index in range(0, len(self.frags) -1):
-            self.frags[index].replace_value(
-                NEXT_MATCH, self.frags[index + 1].get_start_label())
-
-
-    def compile_offsets(self, branch_state=None):
-        '''Compile the code and mark it as compiled'''
-        if not self.compiled_offsets:
-            try:
-                # top level
-                for frag in self.attribs["offset_frags"]:
-                    frag.compile_offsets(branch_state)
-            except KeyError:
-                for frag in self.frags:
-                    frag.compile_offsets(branch_state)
-            self.compiled_offsets = True
-        
-
-    def set_on_success(self, on_success, last_frag=False):
-        '''Set jump on true.'''
-        self.attribs["on_success"] = on_success
-        if last_frag:
-            try:
-                self.frags[-1].set_on_success(on_success, last_frag=last_frag)
-            except IndexError:
-                pass
-        else:
-            for frag in self.frags:
-                frag.set_on_success(on_success)
-
-    def set_on_failure(self, on_failure, last_frag=False):
-        '''Set jump on false.'''
-        self.attribs["on_failure"] = on_failure
-        if last_frag:
-            self.frags[-1].set_on_failure(on_failure, last_frag=last_frag)
-        else:
-            for frag in self.frags:
-                frag.set_on_failure(on_failure)
+        super().__init__(pcap_obj)
+        self.stashed_in = None
 
     @property
     def offset(self):
         '''match_object getter'''
-        return self.attribs["offset"]
+        try:
+            return self.attribs["offset"]
+        except KeyError:
+            return 0
+    
+
+    @property
+    def loc(self):
+        '''match_object getter'''
+        return self.pcap_obj.loc
+
 
     @property
     def match_object(self):
@@ -445,99 +351,67 @@ class CBPFProgram(AbstractProgram):
         '''on_failure getter'''
         return self.attribs["on_failure"]
 
-    def get_start_label(self):
-        '''Set start label'''
-        if len(self.frags) > 0:
-            return self.frags[0].get_start_label()
+    @property
+    def attribs(self):
+        '''frags getter'''
+        return self.pcap_obj.attribs
 
-        return f"__start__{self.loc}"
+    @property
+    def frags(self):
+        '''frags getter'''
+        return self.pcap_obj.frags
 
-    def get_end_label(self):
-        '''Get start label'''
-        return self.frags[-1].get_end_label()
+    @property
+    def left(self):
+        '''left getter'''
+        return self.pcap_obj.left
 
-    def get_next_match(self, item):
-        '''Get next match/code fragment'''
-        if self.frags[-1] == item:
-            return self.parent.get_next_match(self)
-        return self.frags[self.frags.index(item) + 1].get_start_label()
+    @property
+    def right(self):
+        '''right getter'''
+        return self.pcap_obj.right
 
+    def add_code(self, code):
+        '''Invoke pcap obj add_code'''
+        self.pcap_obj.add_code(code)
 
-    def get_offset_code(self):
-        '''Get offset specific code'''
-        code = []
-        try:
-            # top level
-            for frag in self.attribs["offset_frags"]:
-                code.extend(frag.get_offset_code())
-        except KeyError:
-            for frag in self.frags:
-                code.extend(frag.get_offset_code())
-        code.extend(self.offset_code)
-        return code
-        
-
-    def resolve_refs(self):
-        '''Second pass'''
-
-        code = self.get_code()
-        labels = {}
-
-        for index in range(0, len(code)):
-            for label in code[index].labels:
-                labels[label] = index
-
-        for index in range(0, len(code)):
-            for key, value in labels.items():
-                code[index].resolve_refs(key, value)
-
-        for index in range(0, len(code)):
-            for label in code[index].labels:
-                code[index].labels = set()
-
+    def add_offset_code(self, code):
+        '''Invoke pcap obj add_code'''
+        self.pcap_obj.add_offset_code(code)
 
 # These are way too cBPF specific to try to make them into generic instances
 
-class ProgSuccess(CBPFProgram):
+class CBPFAbstractProgram(CBPFHelper):
     '''Basic match on IP - any shape or form,
        added before matching on address, proto, etc.
     '''
-    def __init__(self, attribs=None):
-        super().__init__(attribs=attribs)
-        self.attribs["name"] = "success"
 
-    def compile(self, branch_state=None):
-        super().compile(branch_state)
+class CBPFProgSuccess(CBPFHelper):
+    '''Basic match on IP - any shape or form,
+       added before matching on address, proto, etc.
+    '''
+    def compile(self, compiler_state=None):
+        super().compile(compiler_state)
         self.add_code([RET(0xFFFF, label=[SUCCESS])])
 
-class ProgFail(CBPFProgram):
+class CBPFProgFail(CBPFHelper):
     '''Basic match on IP - any shape or form,
        added before matching on address, proto, etc.
     '''
-    def __init__(self, attribs=None):
-        super().__init__(attribs=attribs)
-        self.attribs["name"] = "fail"
-
-    def compile(self, branch_state=None):
-        super().compile(branch_state)
+    def compile(self, compiler_state=None):
+        super().compile(compiler_state)
         self.add_code([RET(0, label=[LAST_INSN, FAIL])])
 
 
-class ProgL2(CBPFProgram):
+class CBPFProgL2(CBPFHelper):
     '''Basic match on IP - any shape or form,
        added before matching on address, proto, etc.
     '''
-    def __init__(self, match_object=None, offset=0, attribs=None):
-        if attribs is not None:
-            super().__init__(attribs=attribs)
-        else:
-            super().__init__(match_object=match_object, offset=offset)
-            self.attribs["name"] = "l2"
 
-    def compile(self, branch_state=None):
+    def compile(self, compiler_state=None):
 
-        super().compile(branch_state)
-        branch_state.offset = ETHER["size"]
+        super().compile(compiler_state)
+        compiler_state.offset = ETHER["size"]
 
         if isinstance(self.match_object, str):
             self.add_code([
@@ -550,52 +424,39 @@ class ProgL2(CBPFProgram):
                 JEQ([self.match_object, self.on_success, self.on_failure], mode=7),
             ])
 
-    def compile_offsets(self, branch_state=None):
+    def compile_offsets(self, compiler_state=None):
         '''L2 offset'''
-        super().compile_offsets(branch_state)
+        super().compile_offsets(compiler_state)
 
         return ETHER["size"]
 
 
-class Prog8021Q(CBPFProgram):
+class CBPFProg8021Q(CBPFHelper):
     '''Vlan matcher'''
-    def __init__(self, match_object, offset=0, attribs=None):
-        if attribs is not None:
-            super().__init__(attribs=attribs)
-        else:
-            super().__init__(frags=[ProgL2(match_object="qtag", offset=offset)], match_object=match_object, offset=offset)
+    def compile(self, compiler_state=None):
 
-    def compile(self, branch_state=None):
+        super().compile(compiler_state)
 
-        super().compile(branch_state)
-
-        branch_state.offset = ETHER["size"] + 4
+        compiler_state.offset = ETHER["size"] + 4
         self.add_code([
             LD(self.offset + ETHER["size"] + 2, size=2, mode=1),
             AND(0x3F, mode=4),
             JEQ([self.match_object, self.on_success, self.on_failure], mode=7)
         ])
 
-    def compile_offsets(self, branch_state=None):
+    def compile_offsets(self, compiler_state=None):
         '''802.1q offset'''
-        return super().compile_offsets(branch_state) + 4
+        return super().compile_offsets(compiler_state) + 4
 
 
-class ProgL3(CBPFProgram):
+class CBPFProgL3(CBPFHelper):
     '''Layer 3 protocol matcher'''
-    def __init__(self, match_object=None, offset=0, attribs=None):
-        if attribs is not None:
-            super().__init__(attribs=attribs)
-        else:
-            super().__init__(match_object=match_object, offset=offset)
-            self.attribs["name"] = "l3"
-
-    def compile(self, branch_state=None):
+    def compile(self, compiler_state=None):
         '''Compile the code'''
 
-        super().compile(branch_state)
+        super().compile(compiler_state)
         self.add_code([
-            LD(self.offset + branch_state.offset + IP["proto"], size=1, mode=1),
+            LD(self.offset + compiler_state.offset + IP["proto"], size=1, mode=1),
             JEQ([self.match_object, self.on_success, self.on_failure], mode=7),
         ])
 
@@ -604,134 +465,97 @@ PORT = {
     "dst": 2
 }
 
-class ProgIP(CBPFProgram):
+class CBPFProgIP(CBPFHelper):
     '''Basic match on IP - any shape or form,
        added before matching on address, proto, etc.
     '''
-    def __init__(self, attribs=None, offset=0):
-        super().__init__(frags=[ProgL2(match_object="ip", offset=offset)], attribs=attribs)
-        self.attribs["name"] = "ip"
-
-    def compile_offsets(self, branch_state=None):
+    def compile_offsets(self, compiler_state=None):
         '''Compile offset past IP Headers'''
-        super().compile_offsets(branch_state)
-        print(branch_state.offset)
+        super().compile_offsets(compiler_state)
+        print(compiler_state.offset)
         self.add_offset_code([
-            LD([branch_state.offset], size=1, mode=5, reg="x")
+            LD([compiler_state.offset], size=1, mode=5, reg="x")
         ])
 
-class ProgTCP(CBPFProgram):
+class CBPFProgTCP(CBPFHelper):
     '''Basic match on IP - any shape or form,
        added before matching on address, proto, etc.
     '''
-    def __init__(self, attribs=None, offset=0):
-        super().__init__(frags=[ProgIP(offset=offset), ProgL3(match_object=IP_PROTOS["tcp"], offset=offset)], attribs=attribs)
-        self.attribs["name"] = "tcp"
-
-    def compile_offsets(self, branch_state=None):
+    def compile_offsets(self, compiler_state=None):
         '''Compile offset past IP Headers'''
-        super().compile_offsets(branch_state)
+        super().compile_offsets(compiler_state)
 
         self.add_offset_code([
-            LD([branch_state.offset + 12], size=1, mode=2),
+            LD([compiler_state.offset + 12], size=1, mode=2),
             RSH([2], mode=4),
             ADD([], mode=0),
             TAX(),
         ])
 
 
-class ProgPort(CBPFProgram):
+class CBPFProgPort(CBPFHelper):
     '''Basic match on IP - any shape or form,
        added before matching on address, proto, etc.
     '''
-    def __init__(self, match_object=None, frags=None, attribs=None, offset=0):
-
-        if frags is None and attribs is None:
-            frags = [ProgIP()]
-
-        super().__init__(match_object=match_object, frags=frags, attribs=attribs)
-        self.attribs["name"] = "port"
-
-    def compile(self, branch_state=None):
+    def compile(self, compiler_state=None):
         '''Compile the code'''
 
-        super().compile(branch_state)
+        super().compile(compiler_state)
 
         code = [
-            LD([branch_state.offset], size=1, mode=5, reg="x")
+            LD([compiler_state.offset], size=1, mode=5, reg="x")
         ]
 
-        if self.frags[0].result is None:
-            self.stashed_in = branch_state.next_free_reg()
+        if self.pcap_obj.frags[0].result is None:
+            self.stashed_in = compiler_state.next_free_reg()
             self.add_code([ST([self.stashed_in], mode=3)])
 
-        self.compile_offsets(branch_state)
+        self.compile_offsets(compiler_state)
 
-        if "src" in self.quals:
+        if "src" in self.pcap_obj.quals:
             code.append(
-                LD([branch_state.offset], size=2, mode=2),
+                LD([compiler_state.offset], size=2, mode=2),
             )
-        if "dst" in self.quals:
+        if "dst" in self.pcap_obj.quals:
             code.append(
-                LD([branch_state.offset + 2], size=2, mode=2),
+                LD([compiler_state.offset + 2], size=2, mode=2),
             )
 
-        if self.frags[0].result is None:
+        if self.pcap_obj.frags[0].result is None:
             code.append(LD([self.stashed_in], reg="x", mode=3))
             code.append(JEQ([self.on_success, self.on_failure], mode=8))
-            branch_state.release(self.stashed_in)
+            compiler_state.release(self.stashed_in)
         else:
-            code.append(JEQ([self.frags[0].result, self.on_success, self.on_failure], mode=7))
+            code.append(JEQ([self.pcap_obj.frags[0].result, self.on_success, self.on_failure], mode=7))
         self.add_code(code)
 
-class ProgIPv4(CBPFProgram):
+class CBPFProgIPv4(CBPFHelper):
     '''Basic match on v4 address or network.
     '''
-    def __init__(self, match_object=None, offset=0, attribs=None, add_ip_check=True):
-
-        if attribs is not None:
-            super().__init__(attribs=attribs)
-        else:
-            super().__init__(match_object=match_object, offset=offset)
-            if add_ip_check:
-                self.frags = [ProgIP(offset=offset)]
-        self.attribs["name"] = "ipv4"
-
-    def add_quals(self, quals):
-        '''Override add_quals to take care of "interesting" syntax'''
-        super().add_quals(quals)
-        if "srcordst" in self.quals or "srcanddst" in self.quals:
-            left = ProgIPv4(match_object=self.match_object, offset=self.offset, add_ip_check=False)
-            right = ProgIPv4(match_object=self.match_object, offset=self.offset, add_ip_check=False)
-            left.add_quals("src")
-            right.add_quals("dst")
-            if "srcordst" in self.quals:
-                self.frags.append(ProgOR(left=left, right=right))
-            else:
-                self.frags.append(ProgAND(left=left, right=right))
-
-    def compile(self, branch_state=None):
+    def compile(self, compiler_state=None):
         '''Generate the actual code for the match'''
 
         addr = V4_NET_REGEXP.match(self.match_object)
         location = None
 
-        super().compile(branch_state)
+        super().compile(compiler_state)
 
-        if "srcordst" in self.quals or "srcanddst" in self.quals:
+        if "srcordst" in self.pcap_obj.quals or "srcanddst" in self.pcap_obj.quals:
             return
 
-        for qual in self.quals:
-            # Use only simple qualifiers. Skip protos, vlans, etc 
+        for qual in self.pcap_obj.quals:
+            # Use only simple qualifiers. Skip protos, vlans, etc
+
             if isinstance(qual, str):
                 try:
-                    location = branch_state.offset + self.offset + IP[qual]
+                    location = compiler_state.offset + self.offset + IP[qual]
                 except KeyError:
                     pass
                 if location is not None:
+                    print(location)
                     break
         if location is None:
-            raise ValueError(f"Invalid address type specifier {self.quals}")
+            raise ValueError(f"Invalid address type specifier {self.pcap_obj.quals}")
 
 
         code = [LD(location, size=4, mode=1)]
@@ -743,65 +567,37 @@ class ProgIPv4(CBPFProgram):
         self.add_code(code)
 
 
-class ProgNOT(CBPFProgram):
+class CBPFProgNOT(CBPFHelper):
     '''Negate the result of all frags.
     '''
-    def __init__(self, frags=None, attribs=None):
-        # swap on_success and on_failure
-
-        super().__init__(frags=frags, attribs=attribs)
-        self.attribs["name"] = "not"
-
-    def compile(self, branch_state=None):
+    def compile(self, compiler_state=None):
         '''Compile NOT - inverse true and false'''
-        super().compile(branch_state)
-        self.replace_value(NEXT_MATCH, "__temp_not")
-        self.replace_value(FAIL, NEXT_MATCH)
-        self.replace_value("__temp_not", FAIL)
+        super().compile(compiler_state)
+        self.pcap_obj.replace_value(NEXT_MATCH, "__temp_not")
+        self.pcap_obj.replace_value(FAIL, NEXT_MATCH)
+        self.pcap_obj.replace_value("__temp_not", FAIL)
 
 
-class ProgOR(CBPFProgram):
+class CBPFProgOR(CBPFHelper):
     '''Perform logical OR on left and right frag(s)
     '''
-    def __init__(self, left=None, right=None, attribs=None):
-        if attribs is None:
-            self.right = CBPFProgram(frags=right)
-            self.left = CBPFProgram(frags=left)
-            super().__init__(frags=[self.left, self.right])
-        else:
-            super().__init__(attribs=attribs)
-            self.left=attribs["frags"][0]
-            self.right=attribs["frags"][1]
-        self.attribs["name"] = "or"
-
-    def compile(self, branch_state=None):
+    def compile(self, compiler_state=None):
         '''Compile OR - inverse true and false'''
 
-        old_state = branch_state.quals.copy()
-        offset = branch_state.offset
-        self.left.compile(branch_state)
-        branch_state.quals = old_state
-        branch_state.offset = offset
-        self.right.compile(branch_state)
+        old_state = compiler_state.quals.copy()
+        offset = compiler_state.offset
+        self.left.compile(compiler_state)
+        compiler_state.quals = old_state
+        compiler_state.offset = offset
+        self.right.compile(compiler_state)
 
         self.frags[0].replace_value(self.frags[1].get_start_label(), NEXT_MATCH)
         self.frags[0].replace_value(FAIL, self.frags[1].get_start_label())
 
 
-class ProgAND(CBPFProgram):
+class CBPFProgAND(CBPFHelper):
     '''Perform logical AND on left and right frag(s)
     '''
-    def __init__(self, left=None, right=None, attribs=None):
-        if attribs is None:
-            self.right = CBPFProgram(frags=right)
-            self.left = CBPFProgram(frags=left)
-            super().__init__(frags=[self.left, self.right])
-        else:
-            super().__init__(attribs=attribs)
-            self.left=attribs["frags"][0]
-            self.right=attribs["frags"][1]
-
-        self.attribs["name"] = "and"
 
 COMP_TABLE = {
     "<" : JLT,
@@ -812,25 +608,19 @@ COMP_TABLE = {
     "<=" : JLE
 }
 
-class ProgOffset(CBPFProgram):
+class CBPFProgOffset(CBPFHelper):
     '''Perform computation of offset to payload
     '''
-    def __init__(self, frags=None, attribs=None):
-        super().__init__(frags=frags, attribs=attribs)
-        self.attribs["name"] = "compute_offset"
-        self.attribs["offset_frags"] = frags
-        self.attribs["frags"] = []
 
-
-    def compile(self, branch_state=None):
+    def compile(self, compiler_state=None):
         '''We compile offset code instead of the normal
            match logic.
         '''
 
-        super().compile(branch_state)
-        super().compile_offsets(branch_state)
+        super().compile(compiler_state)
+        super().compile_offsets(compiler_state)
 
-        code = self.get_offset_code()
+        code = self.pcap_obj.get_offset_code()
         if len(code) == 0:
             # our relocation mechanism breaks if a prog does not
             # generate any code and has labels
@@ -851,48 +641,32 @@ COMP_TABLE = {
 }
 
 
-class ProgLoad(CBPFProgram):
+class CBPFProgLoad(CBPFHelper):
     '''Load a value from packet address
     '''
-    def __init__(self, loc=0, size=4, attribs=None):
-        if attribs is None:
-            super().__init__()
-            self.attribs["loc"] = loc
-            self.attribs["size"] = size
-        else:
-            super().__init__(attribs=attribs)
-        self.attribs["name"] = "ar_load"
-
-    def compile(self, branch_state=None):
+    def compile(self, compiler_state=None):
         '''Compile arithmetics'''
 
-        super().compile(branch_state)
+        super().compile(compiler_state)
 
-        super().compile_offsets(branch_state)
+        super().compile_offsets(compiler_state)
 
-        if isinstance(self.attribs["loc"], Immediate):
-            if self.use_offset:
-               self.add_code([LD([self.attribs["loc"].attribs["match_object"] + branch_state.offset], size=self.attribs["size"], mode=2)])
+        if isinstance(self.pcap_obj.attribs["loc"], Immediate):
+            if self.pcap_obj.use_offset:
+                self.add_code([LD([self.pcap_obj.attribs["loc"].attribs["match_object"] + compiler_state.offset], size=self.pcap_obj.attribs["size"], mode=2)])
             else:
-               self.add_code([LD([self.attribs["loc"].attribs["match_object"] + branch_state.offset], size=self.attribs["size"], mode=1)])
+                self.add_code([LD([self.pcap_obj.attribs["loc"].attribs["match_object"] + compiler_state.offset], size=self.pcap_obj.attribs["size"], mode=1)])
 
-class ProgIndexLoad(CBPFProgram):
+class CBPFProgIndexLoad(CBPFHelper):
     '''Perform arithmetic operations.
     '''
-    def __init__(self, frags=None, size=4, attribs=None):
-        if attribs is None:
-            super().__init__(frags=frags)
-            self.attribs["size"] = size
-        else:
-            super().__init__(attribs=attribs)
-        self.attribs["name"] = "ar_load"
 
-    def compile(self, branch_state=None):
+    def compile(self, compiler_state=None):
         '''Compile arithmetics'''
-        super().compile(branch_state)
+        super().compile(compiler_state)
         self.add_code([
             TAX(),
-            LD([0], size=self.attribs["size"], mode=2)
+            LD([0], size=self.pcap_obj.attribs["size"], mode=2)
         ])
 
 
@@ -921,63 +695,42 @@ def compute(left, op, right):
     return COMPUTE_TABLE[op](left, right)
 
 
-class ProgComp(CBPFProgram):
+class CBPFProgComp(CBPFHelper):
     '''Perform arithmetic comparisons.
     '''
-    def __init__(self, op=None, left=None, right=None, attribs=None):
-        self.using_stash = False
-        if attribs is None:
-            if isinstance(left, Immediate) or isinstance(right, Immediate):
-                self.left = left
-            else:
-                self.left = StashResult(frags=left)
-                self.using_stash = True
-            self.right = right
-            super().__init__(frags=[self.left, self.right])
-            self.attribs["op"] = op
-        else:
-            super().__init__(attribs=attribs)
-            self.left=attribs["frags"][0]
-            self.right=attribs["frags"][1]
-        self.attribs["name"] = "ar_comp"
 
-    def compile(self, branch_state=None):
+    # needs complete rewrite
+
+    def compile(self, compiler_state=None):
         '''Compile arithmetics'''
-        super().compile(branch_state)
+        super().compile(compiler_state)
 
-        if self.left.result is None and self.right.result is None:
-            self.add_code([COMP_TABLE[self.attribs["op"]]([self.left.stashed_in, self.on_success, self.on_failure], mode=3)])
+##        if self.left.result is None and self.right.result is None:
+#            self.add_code([COMP_TABLE[self.attribs["op"]]([self.left.stashed_in, self.on_success, self.on_failure], mode=3)])
+#
+#        if self.left.result is not None and self.right.result is None:
+#            self.add_code([COMP_TABLE[self.attribs["op"]]([self.left.result, self.on_success, self.on_failure], mode=7)])
+#
+#        if self.pcap_obj.left.result is None and self.pcap_obj.right.result is not None:
+#            if isinstance(self.left, StashResult):
+#                self.pcap_obj.left.code.pop()
+#            self.add_code([COMP_TABLE[self.attribs["op"]]([self.right.result, self.on_success, self.on_failure], mode=7)])
+#
+#        if self.left.result is not None and self.right.result is not None:
+#            self.result = compute(self.left.result, self.attribs["op"], self.right.result)
+#            if self.result:
+#                self.add_code(JMP([self.on_success]))
+#            else:
+#                self.add_code(JMP([self.on_failure]))
+#
+#        if self.using_stash:
+#            compiler_state.release(self.left.stashed_in)
 
-        if self.left.result is not None and self.right.result is None:
-            self.add_code([COMP_TABLE[self.attribs["op"]]([self.left.result, self.on_success, self.on_failure], mode=7)])
-
-        if self.left.result is None and self.right.result is not None:
-            if isinstance(self.left, StashResult):
-                self.left.code.pop()
-            self.add_code([COMP_TABLE[self.attribs["op"]]([self.right.result, self.on_success, self.on_failure], mode=7)])
-
-        if self.left.result is not None and self.right.result is not None:
-            self.result = compute(self.left.result, self.attribs["op"], self.right.result)
-            if self.result:
-                self.add_code(JMP([self.on_success]))
-            else:
-                self.add_code(JMP([self.on_failure]))
-
-        if self.using_stash:
-            branch_state.release(self.left.stashed_in)
-
-class Immediate(CBPFProgram):
+class CBPFImmediate(CBPFHelper):
     '''Fake leafe for immediate ops
     '''
-    def __init__(self, match_object=None, attribs=None):
-        if attribs is None:
-            super().__init__(match_object=match_object)
-        else:
-            super().__init__(attribs=attribs)
-        self.attribs["name"] = "immediate"
-
-    def compile(self, branch_state=None):
-        self.result = self.match_object
+    def compile(self, compiler_state=None):
+        self.pcap_obj.result = self.match_object
 
 
 ARITH_TABLE = {
@@ -993,124 +746,34 @@ ARITH_TABLE = {
     ">>" : RSH
 }
 
-class ProgArOp(CBPFProgram):
+class CBPFProgArOp(CBPFHelper):
     '''Perform arithmetic operations.
     '''
-    def __init__(self, op=None, left=None, right=None, attribs=None):
-        self.using_stash = False
-        if attribs is None:
-            if isinstance(left, Immediate) or isinstance(right, Immediate):
-                self.left = left
-            else:
-                self.left = StashResult(frags=left)
-                self.using_stash = True
-            self.right = right
-            super().__init__(frags=[self.left, self.right])
-            self.attribs["op"] = op
-        else:
-            super().__init__(attribs=attribs)
-            self.left=attribs["frags"][0]
-            self.right=attribs["frags"][1]
 
-        self.attribs["name"] = "ar_op"
-
-    def compile(self, branch_state=None):
+    def compile(self, compiler_state=None):
         '''Compile arithmetics'''
-        super().compile(branch_state)
+        super().compile(compiler_state)
 
-        if self.left.result is None and self.right.result is None:
-            self.add_code([
-                    LD([self.left.stashed_in], reg="x", mode=3),
-                    ARITH_TABLE[self.attribs["op"]](mode=0)
-                ])
+#        if self.left.result is None and self.right.result is None:
+#            self.add_code([
+#                    LD([self.left.stashed_in], reg="x", mode=3),
+#                    ARITH_TABLE[self.attribs["op"]](mode=0)
+#                ])
+#
+#        if self.left.result is not None and self.right.result is None:
+#            self.add_code([ARITH_TABLE[self.attribs["op"]]([self.left.result], mode=4)])
+#
+#        if self.left.result is None and self.right.result is not None:
+#            if isinstance(self.left, StashResult):
+#                self.left.code.pop()
+#            self.add_code([ARITH_TABLE[self.attribs["op"]]([self.right.result], mode=4)])
+#
+#        if self.left.result is not None and self.right.result is not None:
+#            self.result = compute(self.left.result, self.attribs["op"], self.right.result)
+#
+#        if self.using_stash:
+#            compiler_state.release(self.left.stashed_in)
 
-        if self.left.result is not None and self.right.result is None:
-            self.add_code([ARITH_TABLE[self.attribs["op"]]([self.left.result], mode=4)])
-
-        if self.left.result is None and self.right.result is not None:
-            if isinstance(self.left, StashResult):
-                self.left.code.pop()
-            self.add_code([ARITH_TABLE[self.attribs["op"]]([self.right.result], mode=4)])
-
-        if self.left.result is not None and self.right.result is not None:
-            self.result = compute(self.left.result, self.attribs["op"], self.right.result)
-
-        if self.using_stash:
-            branch_state.release(self.left.stashed_in)
-
-class ProgTAX(CBPFProgram):
-    '''Perform arithmetic operations.
-    '''
-    def __init__(self, frags=None, attribs=None):
-        if attribs is None:
-            super().__init__(frags=frags)
-        else:
-            super().__init__(attribs=attribs)
-        self.attribs["name"] = "tax"
-
-    def compile(self, branch_state=None):
-        '''Compile arithmetics'''
-        super().compile(branch_state)
-        self.add_code([TAX()])
-
-class StashResult(CBPFProgram):
-    '''Perform arithmetic operations.
-    '''
-    def __init__(self, frags=None, attribs=None):
-        if attribs is None:
-            super().__init__(frags=frags)
-        else:
-            super().__init__(attribs=attribs)
-        self.attribs["name"] = "stash"
-        self.stashed_in = None
-
-    def compile(self, branch_state=None):
-        '''Stash result in the first available scratch reg'''
-        super().compile(branch_state)
-        self.stashed_in = branch_state.next_free_reg()
-        self.add_code([ST([self.stashed_in], mode=3)])
-
-
-class ProgramEncoder(json.JSONEncoder):
-    '''Serializer to JSON'''
-
-    def default(self, o):
-        if isinstance(o, CBPFProgram):
-            return o.attribs.copy()
-        return json.JSONEncoder.default(self, o)
-
-def loads_hook(obj):
-    '''Custom JSON deserializer'''
-    try:
-        return JUMPTABLE[obj["name"]](attribs=obj)
-    except KeyError:
-        return None
-
-
-def finalize(prog):
-    '''Add success and failure return instructions to the end'''
-    return CBPFProgram(frags=[prog, ProgSuccess(), ProgFail()])
-
-JUMPTABLE = {
-    "generic":CBPFProgram,
-    "ip":ProgIP,
-    "l2":ProgL2,
-    "l3":ProgL3,
-    "tcp":ProgTCP,
-#    "udp":ProgUDP,
-    "port":ProgPort,
-    "ipv4":ProgIPv4,
-    "not":ProgNOT,
-    "or":ProgOR,
-    "and":ProgAND,
-    "fail":ProgFail,
-    "success":ProgSuccess,
-    "ar_comp":ProgComp,
-    "ar_op":ProgArOp,
-    "ar_load":ProgLoad,
-    "index_load":ProgIndexLoad,
-    "immediate":Immediate,
-    "stash":StashResult,
-    "tax":ProgTAX,
-    "compute_offset":ProgOffset
-}
+def dispatcher(obj):
+    '''Return the correct code helper'''
+    return getattr(sys.modules[__name__], f"CBPF{obj.__class__.__name__}")(obj)
