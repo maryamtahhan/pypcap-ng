@@ -50,6 +50,7 @@ def p_comparisons(p):
                   | arth NEQ arth
                   | arth EQUAL arth
     '''
+
     p[0] = code_objects.ProgComp(op=p[2],left=p[1],right=p[3])
 
 
@@ -147,11 +148,14 @@ def p_pname(p):
                 | RADIO
 '''
     # protos with known header computations
-    if p[1] == "tcp":
+    if p[1] == "ip":
+        p[0] = code_objects.ProgIP()
+    elif p[1] == "tcp":
         p[0] = code_objects.ProgTCP()
     elif p[1] == "udp":
         p[0] == code_objects.ProgUDP()
     else:
+        print("phead quals")
         try:
             p[0] = code_objects.ProgL2(ETH_PROTOS[p[1]])
         except KeyError:
@@ -248,7 +252,6 @@ def p_pload(p):
     # push it as quals into peek
     #p[0] = DISPATCH["generic"](frags=[p[1], p[2]])
 
-    p[2].add_frags(p[1])
     p[2].add_frags(code_objects.ProgOffset(frags=p[1]))
     p[2].use_offset = True
 

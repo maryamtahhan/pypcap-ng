@@ -317,7 +317,6 @@ V4_NET_REGEXP = re.compile(r"(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\/(\d{1,2})")
 class CBPFHelper(AbstractHelper):
     '''cBPF variant of AbstractHelper'''
     def __init__(self, pcap_obj):
-
         super().__init__(pcap_obj)
         self.stashed_in = None
 
@@ -436,7 +435,6 @@ class CBPFProg8021Q(CBPFHelper):
     def compile(self, compiler_state=None):
 
         super().compile(compiler_state)
-
         compiler_state.offset = ETHER["size"] + 4
         self.add_code([
             LD(self.offset + ETHER["size"] + 2, size=2, mode=1),
@@ -469,10 +467,10 @@ class CBPFProgIP(CBPFHelper):
     '''Basic match on IP - any shape or form,
        added before matching on address, proto, etc.
     '''
+
     def compile_offsets(self, compiler_state=None):
         '''Compile offset past IP Headers'''
         super().compile_offsets(compiler_state)
-        print(compiler_state.offset)
         self.add_offset_code([
             LD([compiler_state.offset], size=1, mode=5, reg="x")
         ])
@@ -552,7 +550,6 @@ class CBPFProgIPv4(CBPFHelper):
                 except KeyError:
                     pass
                 if location is not None:
-                    print(location)
                     break
         if location is None:
             raise ValueError(f"Invalid address type specifier {self.pcap_obj.quals}")
@@ -618,7 +615,7 @@ class CBPFProgOffset(CBPFHelper):
         '''
 
         super().compile(compiler_state)
-        super().compile_offsets(compiler_state)
+        self.pcap_obj.compile_offsets(compiler_state)
 
         code = self.pcap_obj.get_offset_code()
         if len(code) == 0:
@@ -699,32 +696,42 @@ class CBPFProgComp(CBPFHelper):
     '''Perform arithmetic comparisons.
     '''
 
-    # needs complete rewrite
-
     def compile(self, compiler_state=None):
-        '''Compile arithmetics'''
+        '''Compile comparison between operands'''
+
+        left = self.pcap_obj.left
+        right = self.pcap_obj.right
+        stashed_in = None
+
         super().compile(compiler_state)
 
-##        if self.left.result is None and self.right.result is None:
-#            self.add_code([COMP_TABLE[self.attribs["op"]]([self.left.stashed_in, self.on_success, self.on_failure], mode=3)])
-#
-#        if self.left.result is not None and self.right.result is None:
-#            self.add_code([COMP_TABLE[self.attribs["op"]]([self.left.result, self.on_success, self.on_failure], mode=7)])
-#
-#        if self.pcap_obj.left.result is None and self.pcap_obj.right.result is not None:
-#            if isinstance(self.left, StashResult):
-#                self.pcap_obj.left.code.pop()
-#            self.add_code([COMP_TABLE[self.attribs["op"]]([self.right.result, self.on_success, self.on_failure], mode=7)])
-#
-#        if self.left.result is not None and self.right.result is not None:
-#            self.result = compute(self.left.result, self.attribs["op"], self.right.result)
-#            if self.result:
-#                self.add_code(JMP([self.on_success]))
-#            else:
-#                self.add_code(JMP([self.on_failure]))
-#
-#        if self.using_stash:
-#            compiler_state.release(self.left.stashed_in)
+        if left.result is None:
+            stashed_in = compiler_state.next_free_reg()
+            left.add_code([ST([self.stashed_in], mode=3)])
+
+        if left.result is None and right.result is None:
+            self.add_code([
+                LD([self.left.stashed_in], reg="x", mode=3),
+                COMP_TABLE[self.attribs["op"]]([self.stashed_in, self.on_success, self.on_failure], mode=3)
+            ])
+
+        if left.result is not None and right.result is None:
+            self.add_code([COMP_TABLE[self.attribs["op"]]([left.result, self.on_success, self.on_failure], mode=7)])
+
+        if left.result is None and right.result is not None:
+            if stashed_in is not None:
+                left.code.pop()
+            self.add_code([COMP_TABLE[self.attribs["op"]]([right.result, self.on_success, self.on_failure], mode=7)])
+
+        if left.result is not None and right.result is not None:
+            self.pcap_obj.result = compute(left.result, self.attribs["op"], right.result)
+            if self.pcap_obj.result:
+                self.add_code(JMP([self.on_success]))
+            else:
+                self.add_code(JMP([self.on_failure]))
+
+        if stashed_in is not None:
+            compiler_state.release(stashed_in)
 
 class CBPFImmediate(CBPFHelper):
     '''Fake leafe for immediate ops
@@ -752,27 +759,35 @@ class CBPFProgArOp(CBPFHelper):
 
     def compile(self, compiler_state=None):
         '''Compile arithmetics'''
+
+        left = self.pcap_obj.left
+        right = self.pcap_obj.right
+        stashed_in = None
+
         super().compile(compiler_state)
 
-#        if self.left.result is None and self.right.result is None:
-#            self.add_code([
-#                    LD([self.left.stashed_in], reg="x", mode=3),
-#                    ARITH_TABLE[self.attribs["op"]](mode=0)
-#                ])
-#
-#        if self.left.result is not None and self.right.result is None:
-#            self.add_code([ARITH_TABLE[self.attribs["op"]]([self.left.result], mode=4)])
-#
-#        if self.left.result is None and self.right.result is not None:
-#            if isinstance(self.left, StashResult):
-#                self.left.code.pop()
-#            self.add_code([ARITH_TABLE[self.attribs["op"]]([self.right.result], mode=4)])
-#
-#        if self.left.result is not None and self.right.result is not None:
-#            self.result = compute(self.left.result, self.attribs["op"], self.right.result)
-#
-#        if self.using_stash:
-#            compiler_state.release(self.left.stashed_in)
+        if left.result is None and right.result is None:
+            stashed_in = compiler_state.next_free_reg()
+            self.add_code([
+                    LD([stashed_in], reg="x", mode=3),
+                    ARITH_TABLE[self.attribs["op"]](mode=0)
+                ])
+
+        if left.result is not None and right.result is None:
+            self.add_code([ARITH_TABLE[self.attribs["op"]]([left.result], mode=4)])
+
+        if left.result is None and right.result is not None:
+            if stashed_in is not None:
+                left.code.pop()
+            self.add_code([ARITH_TABLE[self.attribs["op"]]([right.result], mode=4)])
+
+        if self.left.result is not None and self.right.result is not None:
+            if stashed_in is not None:
+                left.code.pop()
+            self.pcap_obj.result = compute(left.result, self.attribs["op"], right.result)
+
+        if stashed_in is not None:
+            compiler_state.release(stashed_in)
 
 def dispatcher(obj):
     '''Return the correct code helper'''

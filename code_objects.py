@@ -301,13 +301,8 @@ class AbstractProgram():
     def compile_offsets(self, branch_state=None):
         '''Compile the code and mark it as compiled'''
         if not self.compiled_offsets:
-            try:
-                # top level
-                for frag in self.attribs["offset_frags"]:
-                    frag.compile_offsets(branch_state)
-            except KeyError:
-                for frag in self.frags:
-                    frag.compile_offsets(branch_state)
+            for frag in self.frags:
+                frag.compile_offsets(branch_state)
             self.compiled_offsets = True
             for helper in self.helpers:
                 helper.compile_offsets(branch_state)
@@ -384,7 +379,6 @@ class AbstractHelper():
     def compile_offsets(self, compiler_state=None):
         '''compile all code for the same helper type'''
         self.compiled_offsets = True
-
 
 class ProgSuccess(AbstractProgram):
     '''Basic match on IP - any shape or form,
@@ -588,7 +582,7 @@ class ProgComp(AbstractProgram):
     def __init__(self, op=None, left=None, right=None, attribs=None):
         if attribs is None:
             super().__init__(frags=[left, right])
-            self.attribs["op"] = "op"
+            self.attribs["op"] = op
         else:
             super().__init__(attribs=attribs)
         self.left = self.frags[0]
