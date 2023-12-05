@@ -155,7 +155,6 @@ def p_pname(p):
     elif p[1] == "udp":
         p[0] == code_objects.ProgUDP()
     else:
-        print("phead quals")
         try:
             p[0] = code_objects.ProgL2(ETH_PROTOS[p[1]])
         except KeyError:

@@ -29,7 +29,6 @@ def main():
 
     parsed = finalize(parser.PARSER.parse(args["expr"]))
 
-
     print(json.dumps(parsed, cls=ProgramEncoder, indent=4))
 
     parsed.add_helper(dispatcher)
@@ -38,7 +37,7 @@ def main():
 
     parsed.compile(CBPFCompilerState())
     counter = 0
-    for inst in parsed.get_code():
+    for inst in parsed.get_code("cbpf"):
         print("{} {}".format(counter, inst))
         counter += 1
 
@@ -48,7 +47,7 @@ def main():
     parsed.resolve_refs()
 
     counter = 0
-    for inst in parsed.get_code():
+    for inst in parsed.get_code("cbpf"):
         print("{} {}".format(counter, inst))
         counter += 1
 

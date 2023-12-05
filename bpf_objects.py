@@ -318,6 +318,7 @@ class CBPFHelper(AbstractHelper):
     '''cBPF variant of AbstractHelper'''
     def __init__(self, pcap_obj):
         super().__init__(pcap_obj)
+        self.helper_id = "cbpf"
         self.stashed_in = None
 
     @property
@@ -372,11 +373,11 @@ class CBPFHelper(AbstractHelper):
 
     def add_code(self, code):
         '''Invoke pcap obj add_code'''
-        self.pcap_obj.add_code(code)
+        self.pcap_obj.add_code(code, self.helper_id)
 
     def add_offset_code(self, code):
         '''Invoke pcap obj add_code'''
-        self.pcap_obj.add_offset_code(code)
+        self.pcap_obj.add_offset_code(code, self.helper_id)
 
 # These are way too cBPF specific to try to make them into generic instances
 
@@ -615,9 +616,10 @@ class CBPFProgOffset(CBPFHelper):
         '''
 
         super().compile(compiler_state)
+
         self.pcap_obj.compile_offsets(compiler_state)
 
-        code = self.pcap_obj.get_offset_code()
+        code = self.pcap_obj.get_offset_code(self.helper_id)
         if len(code) == 0:
             # our relocation mechanism breaks if a prog does not
             # generate any code and has labels
@@ -707,7 +709,7 @@ class CBPFProgComp(CBPFHelper):
 
         if left.result is None:
             stashed_in = compiler_state.next_free_reg()
-            left.add_code([ST([self.stashed_in], mode=3)])
+            left.add_code([ST([self.stashed_in], mode=3)], self.helper_id)
 
         if left.result is None and right.result is None:
             self.add_code([
@@ -720,7 +722,7 @@ class CBPFProgComp(CBPFHelper):
 
         if left.result is None and right.result is not None:
             if stashed_in is not None:
-                left.code.pop()
+                left.code[self.helper_id].pop()
             self.add_code([COMP_TABLE[self.attribs["op"]]([right.result, self.on_success, self.on_failure], mode=7)])
 
         if left.result is not None and right.result is not None:
@@ -768,6 +770,7 @@ class CBPFProgArOp(CBPFHelper):
 
         if left.result is None and right.result is None:
             stashed_in = compiler_state.next_free_reg()
+            left.add_code([ST([self.stashed_in], mode=3)], self.helper_id)
             self.add_code([
                     LD([stashed_in], reg="x", mode=3),
                     ARITH_TABLE[self.attribs["op"]](mode=0)
@@ -778,12 +781,12 @@ class CBPFProgArOp(CBPFHelper):
 
         if left.result is None and right.result is not None:
             if stashed_in is not None:
-                left.code.pop()
+                left.code[self.helper_id].pop()
             self.add_code([ARITH_TABLE[self.attribs["op"]]([right.result], mode=4)])
 
         if self.left.result is not None and self.right.result is not None:
             if stashed_in is not None:
-                left.code.pop()
+                left.code[self.helper_id].pop()
             self.pcap_obj.result = compute(left.result, self.attribs["op"], right.result)
 
         if stashed_in is not None:

@@ -107,6 +107,14 @@ class AbstractCode(dict):
         '''Equal - needed for tests'''
         return self.labels == other.labels
 
+class AbortBranch(Exception):
+    '''Indicate that this branch should not be compiled any further
+       terminates the helper chain
+    '''
+    def __init__(self, message):
+        super().__init__(message)
+
+
 class AbstractProgram():
     '''Chunk of code - fragments can be matchers or other programs'''
     def __init__(self, frags=None, attribs=None, match_object=None):
@@ -160,8 +168,8 @@ class AbstractProgram():
 
         # Code elements. May be different types
 
-        self.code = []
-        self.offset_code = []
+        self.code = {}
+        self.offset_code = {}
 
 
         # qualifiers which are not protos - src, dst, etc
@@ -199,44 +207,50 @@ class AbstractProgram():
         '''Program (fragment) representation'''
         return "".join(self.frags)
 
-    def get_code(self):
+    def get_code(self, code_id):
         '''Resulting code dump'''
         code = []
         for frag in self.frags:
-            code.extend(frag.get_code())
-        code.extend(self.code)
+            code.extend(frag.get_code(code_id))
+        try:
+            code.extend(self.code[code_id])
+        except KeyError:
+            pass
         return code
 
-    def get_offset_code(self):
+    def get_offset_code(self, code_id):
         '''Get offset specific code'''
         code = []
         try:
             # top level
             for frag in self.attribs["offset_frags"]:
-                code.extend(frag.get_offset_code())
+                code.extend(frag.get_offset_code(code_id))
         except KeyError:
             for frag in self.frags:
-                code.extend(frag.get_offset_code())
-        code.extend(self.offset_code)
+                code.extend(frag.get_offset_code(code_id))
+        try:
+            code.extend(self.offset_code[code_id])
+        except KeyError:
+            pass
         return code
 
     def resolve_refs(self):
         '''Second pass'''
+        for helper in self.helpers:
+            code = self.get_code(helper.helper_id)
+            labels = {}
 
-        code = self.get_code()
-        labels = {}
+            for index in range(0, len(code)):
+                for label in code[index].labels:
+                    labels[label] = index
 
-        for index in range(0, len(code)):
-            for label in code[index].labels:
-                labels[label] = index
+            for index in range(0, len(code)):
+                for key, value in labels.items():
+                    code[index].resolve_refs(key, value)
 
-        for index in range(0, len(code)):
-            for key, value in labels.items():
-                code[index].resolve_refs(key, value)
-
-        for index in range(0, len(code)):
-            for label in code[index].labels:
-                code[index].labels = set()
+            for index in range(0, len(code)):
+                for label in code[index].labels:
+                    code[index].labels = set()
 
     def add_frags(self, frags):
         '''Add frags'''
@@ -258,41 +272,62 @@ class AbstractProgram():
         '''Update code start/end labels.
            This should be applicable to both offload and bytecode.
         '''
-        if len(self.code) > 0:
-            self.code[0].add_label(f"__start__{self.loc}")
-            self.code[-1].add_label(f"__end__{self.loc}")
+        for code_id in self.code.keys():
+            code = self.get_code(code_id)
+            if len(code) > 0:
+                code[0].add_label(f"__start__{self.loc}")
+                code[-1].add_label(f"__end__{self.loc}")
 
-    def add_code(self, code):
+    def add_code(self, code, code_id):
         '''Add code and update jump label in last frag
            This should be applicable to both offload and bytecode.
         '''
         if len(self.frags) > 0:
             self.frags[-1].replace_value(NEXT_MATCH, self.ext_label)
-        code[0].add_label(self.ext_label)
-        self.code.extend(code)
+        self.code[code_id].extend(code)
+        self.code[code_id][0].add_label(self.ext_label)
 
-    def add_offset_code(self, code):
+    def add_offset_code(self, code, code_id):
         '''Add offset specific code.
            This is bytecode specific and will not work for most
            offloads. However, it is sufficiently generic to keep here.
         '''
-        self.offset_code.extend(code)
+        try:
+            self.offset_code[code_id].extend(code)
+        except:
+            self.offset_code[code_id] = code
+
+    def drop_branch(self, helper=None):
+        '''Drop all code on this branch'''
+        for frag in self.frags:
+            frag.drop_branch(helper)
+        if helper is not None:
+            self.code[helper.helper_id] = []
+        else:
+            for key in self.code.keys():
+                self.code[key] = []
 
     def compile(self, branch_state):
         '''Compile the program'''
-
         if not self.compiled:
             for frag in self.frags:
                 frag.compile(branch_state)
 
         for helper in self.helpers:
+            if self.code.get(helper.helper_id) is None:
+                self.code[helper.helper_id] = []
             if not helper.compiled:
-                helper.compile(branch_state)
+                try:
+                    helper.compile(branch_state)
+                except AbortBranch:
+                    for frag in self.frags:
+                        frag.drop_branch()
+                    break
 
         for frag in self.frags:
             frag.update_labels()
 
-        for index in range(0, len(self.frags) -1):
+        for index in range(0, len(self.frags) - 1):
             self.frags[index].replace_value(
                 NEXT_MATCH, self.frags[index + 1].get_start_label())
 
@@ -314,8 +349,10 @@ class AbstractProgram():
            Ultimately recurses to the replace_value method in
            all instructions.
         '''
-        for insn in self.get_code():
-            insn.replace_value(old, new)
+
+        for code_id in self.code.keys():
+            for insn in self.get_code(code_id):
+                insn.replace_value(old, new)
 
     def get_start_label(self):
         '''Set start label'''
@@ -368,7 +405,7 @@ class AbstractHelper():
     '''Basic helper class'''
     def __init__(self, expr):
         self.pcap_obj = expr
-        self.helper_type = "generic"
+        self.helper_id = "generic"
         self.compiled = False
         self.compiled_offsets = False
 
@@ -379,6 +416,7 @@ class AbstractHelper():
     def compile_offsets(self, compiler_state=None):
         '''compile all code for the same helper type'''
         self.compiled_offsets = True
+        return 0
 
 class ProgSuccess(AbstractProgram):
     '''Basic match on IP - any shape or form,
