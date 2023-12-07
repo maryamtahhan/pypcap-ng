@@ -12,27 +12,11 @@ import sys
 import re
 from header_constants import ETHER, IP, ETH_PROTOS, IP_PROTOS
 from code_objects import AbstractCode, AbstractHelper, NEXT_MATCH, FAIL, SUCCESS, LAST_INSN, Immediate
+import ipaddress
 
 
 IPV4_REGEXP = re.compile(r"(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})")
 
-
-def ipv4_to_word(ipv4):
-    '''Simplistic convertor from ipv4 text form to 32 bit uint'''
-    match = IPV4_REGEXP.match(ipv4)
-    if match is not None:
-        scale = 24
-        total = 0
-        for index in range(1,5):
-            nibble = int(match.group(index))
-            if nibble > 256 or nibble < 0:
-                raise TypeError("Invalid IP address")
-            total += nibble << scale
-            scale -= 8
-        return total
-    raise TypeError("Invalid IP address")
-
-# BPF instruction formats
 
 FORMATS = [
     "x/%x",                   # 0  register x
@@ -533,8 +517,12 @@ class CBPFProgIPv4(CBPFHelper):
     '''
     def compile(self, compiler_state=None):
         '''Generate the actual code for the match'''
-
-        addr = V4_NET_REGEXP.match(self.match_object)
+        try:
+            addr = ipaddress.ip_address(self.match_object)
+        except ValueError:
+            # we let it raise a value error in this case
+            addr = ipaddress.ip_network(self.match_object)
+        
         location = None
 
         super().compile(compiler_state)
@@ -557,11 +545,14 @@ class CBPFProgIPv4(CBPFHelper):
 
 
         code = [LD(location, size=4, mode=1)]
-        if addr is not None:
-            netmask = 0xffffffff ^ (0xffffffff >> int(addr.group(2)))
-            code.extend([AND(netmask, mode=4), JEQ([ipv4_to_word(addr.group(1)), self.on_success, self.on_failure], mode=7)])
+        if isinstance(addr, ipaddress.IPv4Network):
+            netmask = addr.netmask
+            code.extend([
+                AND(int(addr.netmask), mode=4),
+                JEQ([int(addr.network_address), self.on_success, self.on_failure], mode=7)
+            ])
         else:
-            code.append(JEQ([ipv4_to_word(self.match_object), self.on_success, self.on_failure], mode=7))
+            code.append(JEQ([int(addr), self.on_success, self.on_failure], mode=7))
         self.add_code(code)
 
 
