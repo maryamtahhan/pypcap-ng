@@ -11,6 +11,7 @@
 #
 #
 
+from socket import gethostbyname
 import ply.lex as lex
 import ply.yacc as yacc
 from lexer_defs import tokens
@@ -346,7 +347,12 @@ def p_net6(p):
 def p_hostname(p):
     '''hostname : STRING_LITERAL
     '''
-    p[0] = p[1]
+    target = gethostbyname(p[1])
+    if ":" in target:
+        p[0] = code_objects.ProgIPv6(target)
+    else:
+        p[0] = code_objects.ProgIPv4(target)
+
 
 
 lexer = lex.lex(module=lexer_defs)

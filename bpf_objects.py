@@ -443,6 +443,18 @@ class CBPFProgL3(CBPFHelper):
             JEQ([self.match_object, self.on_success, self.on_failure], mode=7),
         ])
 
+class CBPFProgL3v6(CBPFHelper):
+    '''Layer 3 protocol matcher'''
+    def compile(self, compiler_state=None):
+        '''Compile the code'''
+
+        super().compile(compiler_state)
+        self.add_code([
+            LD(self.offset + compiler_state.offset + IP6["size"], size=1, mode=1),
+            JEQ([self.match_object, self.on_success, self.on_failure], mode=7),
+        ])
+
+
 PORT = {
     "src": 0,
     "dst": 2
@@ -480,6 +492,20 @@ class CBPFProgTCP(CBPFHelper):
             TAX(),
         ])
 
+class CBPFProgTCP6(CBPFHelper):
+    '''Basic match on TCP6 - any shape or form,
+       added before matching on address, proto, etc.
+    '''
+
+class CBPFProgUDP(CBPFHelper):
+    '''Basic match on UDP - any shape or form,
+       added before matching on address, proto, etc.
+    '''
+
+class CBPFProgUDP6(CBPFHelper):
+    '''Basic match on UDP6 - any shape or form,
+       added before matching on address, proto, etc.
+    '''
 
 class CBPFProgPort(CBPFHelper):
     '''Basic match on IP - any shape or form,

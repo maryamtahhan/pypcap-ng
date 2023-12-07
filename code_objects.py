@@ -201,7 +201,9 @@ class AbstractProgram():
 
     def __eq__(self, other):
         '''We are only interested in equality of the generated code.'''
-        return self.code == other.code
+        return self.name == other.name and \
+            self.match_object == other.match_object and \
+            self.frags == other.frags
 
     def __repr__(self):
         '''Program (fragment) representation'''
@@ -256,7 +258,9 @@ class AbstractProgram():
         '''Add frags'''
         if not isinstance(frags, list):
             frags = [frags]
-        self.attribs["frags"].extend(frags)
+        for frag in frags:
+            if not frag in self.frags:
+                self.frags.append(frag)
 
     def add_quals(self, quals):
         '''Add qualifiers'''
@@ -465,6 +469,15 @@ class ProgL3(AbstractProgram):
             super().__init__(match_object=match_object)
             self.attribs["name"] = "l3"
 
+class ProgL3v6(AbstractProgram):
+    '''Layer 3 protocol matcher'''
+    def __init__(self, match_object=None, attribs=None):
+        if attribs is not None:
+            super().__init__(attribs=attribs)
+        else:
+            super().__init__(match_object=match_object)
+            self.attribs["name"] = "l3v6"
+
 
 class ProgIP(AbstractProgram):
     '''Basic match on IP - any shape or form,
@@ -489,6 +502,31 @@ class ProgTCP(AbstractProgram):
     def __init__(self, attribs=None):
         super().__init__(frags=[ProgIP(), ProgL3(match_object=IP_PROTOS["tcp"])], attribs=attribs)
         self.attribs["name"] = "tcp"
+
+class ProgTCP6(AbstractProgram):
+    '''Basic match on IP - any shape or form,
+       added before matching on address, proto, etc.
+    '''
+    def __init__(self, attribs=None):
+        super().__init__(frags=[ProgIP6(), ProgL3v6(match_object=IP_PROTOS["tcp"])], attribs=attribs)
+        self.attribs["name"] = "tcp6"
+
+class ProgUDP(AbstractProgram):
+    '''Basic match on IP - any shape or form,
+       added before matching on address, proto, etc.
+    '''
+    def __init__(self, attribs=None):
+        super().__init__(frags=[ProgIP(), ProgL3(match_object=IP_PROTOS["udp"])], attribs=attribs)
+        self.attribs["name"] = "udp"
+
+class ProgUDP6(AbstractProgram):
+    '''Basic match on IP - any shape or form,
+       added before matching on address, proto, etc.
+    '''
+    def __init__(self, attribs=None):
+        super().__init__(frags=[ProgIP6(), ProgL3v6(match_object=IP_PROTOS["udp"])], attribs=attribs)
+        self.attribs["name"] = "udp6"
+
 
 class ProgPort(AbstractProgram):
     '''Basic match on IP - any shape or form,
@@ -528,6 +566,21 @@ class ProgIPv4(AbstractProgram):
             else:
                 self.frags.append(ProgAND(left=left, right=right))
 
+    def add_frags(self, frags):
+        '''Add frags filtering out ipv4 if present'''
+        if not isinstance(frags, list):
+            frags = [frags]
+        strip = False
+        for index in range(0, len(frags)):
+            if isinstance(frags[index], ProgTCP):
+                strip = True
+            if isinstance(frags[index], ProgUDP):
+                strip = True
+        super().add_frags(frags)
+
+        if strip:
+            self.frags = self.frags[1:]
+
 class ProgIPv6(AbstractProgram):
     '''Basic match on v6 address or network.
     '''
@@ -540,6 +593,23 @@ class ProgIPv6(AbstractProgram):
             if add_ip_check:
                 self.frags = [ProgIP6()]
         self.attribs["name"] = "ipv6"
+
+    def add_frags(self, frags):
+        '''Add frags filtering out ipv4 if present'''
+        if not isinstance(frags, list):
+            frags = [frags]
+        strip = False
+        for index in range(0, len(frags)):
+            if isinstance(frags[index], ProgTCP):
+                frags[index] = ProgTCP6()
+                strip = True
+            if isinstance(frags[index], ProgUDP):
+                frags[index] = ProgUDP6()
+                strip = True
+        super().add_frags(frags)
+
+        if strip:
+            self.frags = self.frags[1:]
 
     def add_quals(self, quals):
         '''Override add_quals to take care of "interesting" syntax'''
@@ -712,11 +782,15 @@ JUMPTABLE = {
     "ip6":ProgIP6,
     "l2":ProgL2,
     "l3":ProgL3,
+    "l3v6":ProgL3v6,
     "tcp":ProgTCP,
-#    "udp":ProgUDP,
+    "udp":ProgUDP,
+    "tcp6":ProgTCP6,
+    "udp6":ProgUDP6,
+    "port":ProgPort,
     "port":ProgPort,
     "ipv4":ProgIPv4,
-    "ipv4":ProgIPv6,
+    "ipv6":ProgIPv6,
     "not":ProgNOT,
     "or":ProgOR,
     "and":ProgAND,
