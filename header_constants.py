@@ -26,6 +26,11 @@ IP = {
     "dst": 16,
 }
 
+IP6 = {
+    "version": 0,
+    "src": 8,
+    "dst": 24,
+}
 # IPv6 will wait for now
 
 

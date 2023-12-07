@@ -10,7 +10,7 @@ Compiler backends.
 
 import sys
 import re
-from header_constants import ETHER, IP, ETH_PROTOS, IP_PROTOS
+from header_constants import ETHER, IP, IP6, ETH_PROTOS, IP_PROTOS
 from code_objects import AbstractCode, AbstractHelper, NEXT_MATCH, FAIL, SUCCESS, LAST_INSN, Immediate
 import ipaddress
 
@@ -460,6 +460,11 @@ class CBPFProgIP(CBPFHelper):
             LD([compiler_state.offset], size=1, mode=5, reg="x")
         ])
 
+class CBPFProgIP6(CBPFHelper):
+    '''Basic match on IP - any shape or form,
+       added before matching on address, proto, etc.
+    '''
+
 class CBPFProgTCP(CBPFHelper):
     '''Basic match on IP - any shape or form,
        added before matching on address, proto, etc.
@@ -522,7 +527,11 @@ class CBPFProgIPv4(CBPFHelper):
         except ValueError:
             # we let it raise a value error in this case
             addr = ipaddress.ip_network(self.match_object)
-        
+
+        # we do not do any further checks, because regexps
+        # should narrow the input to ip_address sufficiently
+        # to guarantee a v4 of some sort.
+
         location = None
 
         super().compile(compiler_state)
@@ -553,6 +562,67 @@ class CBPFProgIPv4(CBPFHelper):
             ])
         else:
             code.append(JEQ([int(addr), self.on_success, self.on_failure], mode=7))
+        self.add_code(code)
+
+class CBPFProgIPv6(CBPFHelper):
+    '''Basic match on v4 address or network.
+    '''
+    def compile(self, compiler_state=None):
+        '''Generate the actual code for the match'''
+        try:
+            addr = ipaddress.ip_address(self.match_object)
+        except ValueError:
+            # we let it raise a value error in this case
+            addr = ipaddress.ip_network(self.match_object)
+        
+        location = None
+
+        super().compile(compiler_state)
+
+        if "srcordst" in self.pcap_obj.quals or "srcanddst" in self.pcap_obj.quals:
+            return
+
+        for qual in self.pcap_obj.quals:
+            # Use only simple qualifiers. Skip protos, vlans, etc
+
+            if isinstance(qual, str):
+                try:
+                    location = compiler_state.offset + self.offset + IP6[qual]
+                except KeyError:
+                    pass
+                if location is not None:
+                    break
+        if location is None:
+            raise ValueError(f"Invalid address type specifier {self.pcap_obj.quals}")
+
+        code = []
+
+
+        if isinstance(addr, ipaddress.IPv6Network):
+            netmask = int(addr.netmask).to_bytes(16)
+            address = int(addr.network_address).to_bytes(16)
+
+            for nibble in range(0,4):
+                if nibble < 3:
+                    next_label = "_v6_{}_{}".format(self.loc, nibble + 1)
+                else:
+                    next_label = self.on_success
+                code.extend([
+                    LD(location + nibble * 4, size=4, mode=1, label=f"_v6_{self.loc}_{nibble}"), 
+                    AND(int.from_bytes(netmask[nibble*4:nibble*4 + 4]), mode=4),
+                    JEQ([int.from_bytes(address[nibble*4:nibble*4 + 4]), next_label, self.on_failure], mode=7)
+                ])
+        else:
+            address = int(addr).to_bytes(16)
+            for nibble in range(0,4):
+                if nibble < 3:
+                    next_label = "_v6_{}_{}".format(self.loc, nibble + 1)
+                else:
+                    next_label = self.on_success
+                code.extend([
+                    LD(location + nibble * 4, size=4, mode=1, label=f"_v6_{self.loc}_{nibble}"), 
+                    JEQ([int.from_bytes(address[nibble*4:nibble*4 + 4]), next_label, self.on_failure], mode=7)
+                ])
         self.add_code(code)
 
 

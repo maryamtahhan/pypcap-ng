@@ -474,6 +474,14 @@ class ProgIP(AbstractProgram):
         super().__init__(frags=[ProgL2(match_object="ip")], attribs=attribs)
         self.attribs["name"] = "ip"
 
+class ProgIP6(AbstractProgram):
+    '''Basic match on IP - any shape or form,
+       added before matching on address, proto, etc.
+    '''
+    def __init__(self, attribs=None):
+        super().__init__(frags=[ProgL2(match_object="ip6")], attribs=attribs)
+        self.attribs["name"] = "ip6"
+
 class ProgTCP(AbstractProgram):
     '''Basic match on IP - any shape or form,
        added before matching on address, proto, etc.
@@ -513,6 +521,32 @@ class ProgIPv4(AbstractProgram):
         if "srcordst" in self.quals or "srcanddst" in self.quals:
             left = ProgIPv4(match_object=self.match_object, add_ip_check=False)
             right = ProgIPv4(match_object=self.match_object, add_ip_check=False)
+            left.add_quals("src")
+            right.add_quals("dst")
+            if "srcordst" in self.quals:
+                self.frags.append(ProgOR(left=left, right=right))
+            else:
+                self.frags.append(ProgAND(left=left, right=right))
+
+class ProgIPv6(AbstractProgram):
+    '''Basic match on v6 address or network.
+    '''
+    def __init__(self, match_object=None, attribs=None, add_ip_check=True):
+
+        if attribs is not None:
+            super().__init__(attribs=attribs)
+        else:
+            super().__init__(match_object=match_object)
+            if add_ip_check:
+                self.frags = [ProgIP6()]
+        self.attribs["name"] = "ipv6"
+
+    def add_quals(self, quals):
+        '''Override add_quals to take care of "interesting" syntax'''
+        super().add_quals(quals)
+        if "srcordst" in self.quals or "srcanddst" in self.quals:
+            left = ProgIPv6(match_object=self.match_object, add_ip_check=False)
+            right = ProgIPv6(match_object=self.match_object, add_ip_check=False)
             left.add_quals("src")
             right.add_quals("dst")
             if "srcordst" in self.quals:
@@ -675,12 +709,14 @@ def finalize(prog):
 JUMPTABLE = {
     "generic":AbstractProgram,
     "ip":ProgIP,
+    "ip6":ProgIP6,
     "l2":ProgL2,
     "l3":ProgL3,
     "tcp":ProgTCP,
 #    "udp":ProgUDP,
     "port":ProgPort,
     "ipv4":ProgIPv4,
+    "ipv4":ProgIPv6,
     "not":ProgNOT,
     "or":ProgOR,
     "and":ProgAND,

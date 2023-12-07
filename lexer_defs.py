@@ -122,8 +122,35 @@ tokens = [
     'LSH', 'RSH',
     'LPAREN', 'RPAREN',
     'NUM', 'ADDR_V4', 'ADDR_V6', 'STRING_LITERAL', 'NET_V4', 'NET_V6',
-    'LBRA', 'RBRA', 'SEMI', 'EQUAL',
+    'LBRA', 'RBRA', 'EQUAL',
 ] + list(reserved.values())
+
+literals = [":"]
+
+def t_addr_net_v4(t):
+    r'\d+\.\d+\.\d+\.\d+(\/\d+){0,1}'
+    if t.value.find('/') > 0:
+        t.type = 'NET_V4'
+    else:
+        t.type = 'ADDR_V4'
+    return t
+
+def t_addr_net_v6_variant_a(t):
+    r'(([a-fA-F0-9]{0,4}:){2,7}[a-fA-F0-9]{0,4})(\/\d+){0,1}'
+    if t.value.find('/') > 0:
+        t.type = 'NET_V6'
+    else:
+        t.type = 'ADDR_V6'
+    return t
+
+def t_addr_net_v6_variant_b(t):
+    r'(([A-F0-9]{0,4}:){7}\d+\.\d+\.\d+\.\d+)(\/\d+){0,1}'
+    if t.value.find('/') > 0:
+        t.type = 'NET_V6'
+    else:
+        t.type = 'ADDR_V6'
+    return t
+
 
 t_LESS = r'<'
 t_GREATER = r'>'
@@ -136,7 +163,6 @@ t_LPAREN = r'\('
 t_RPAREN = r'\)'
 t_LBRA = r'\['
 t_RBRA = r'\]'
-t_SEMI = r':'
 
 t_ADD = r"\+"
 t_SUB = r"-"
@@ -152,22 +178,6 @@ t_RSH = r'>>'
 def t_not_alternative(t):
     r'\!'
     t.type = 'NOT'
-    return t
-
-def t_addr_net_v4(t):
-    r'\d+\.\d+\.\d+\.\d+(\/\d+){0,1}'
-    if t.value.find('/') > 0:
-        t.type = 'NET_V4'
-    else:
-        t.type = 'ADDR_V4'
-    return t
-
-def t_addr_net_v6(t):
-    r'((?:[A-F0-9]{1,4}:){7}[A-F0-9]{1,4})(\/\d+){0,1}'
-    if t.value.find('/') > 0:
-        t.type = 'NET_V6'
-    else:
-        t.type = 'ADDR_V6'
     return t
 
 def t_ZZ_STRING_LITERAL(t):

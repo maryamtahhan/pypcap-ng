@@ -258,7 +258,7 @@ def p_pload(p):
     
 
 def p_peek(p):
-    '''peek    : LBRA arth SEMI NUM RBRA
+    '''peek    : LBRA arth ':' NUM RBRA
                | peekw 
                | peek_comp
     '''
@@ -274,7 +274,7 @@ def p_peekw(p):
 
 def p_peek_comp(p):
     '''peek_comp  : LBRA pload RBRA
-                  |  LBRA pload SEMI NUM RBRA
+                  |  LBRA pload ':' NUM RBRA
     '''
 
     if len(p) == 4:
