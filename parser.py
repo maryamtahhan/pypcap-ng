@@ -232,13 +232,20 @@ def p_id(p):
           | net
           | pload
           | pnum
+          | portrange
     '''
     p[0] = p[1]
 
 def p_pnum(p):
     '''pnum : PORT num
     '''
-    p[0] = DISPATCH["port"](frags=[p[2]])
+    p[0] = code_objects.ProgPort(frags=[p[2]])
+
+def p_portrange(p):
+    '''portrange : PORTRANGE num
+    '''
+    p[0] = code_objects.ProgPortRange(frags=[p[2]])
+
 
 def p_num(p):
     '''num : arth
