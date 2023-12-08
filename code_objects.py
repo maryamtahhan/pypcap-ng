@@ -191,6 +191,14 @@ class AbstractProgram():
         '''
         for frag in self.frags:
             frag.add_helper(dispatcher)
+
+        try:
+            if isinstance(self.attribs["loc"], list):
+                for loc in self.attribs["loc"]:
+                    loc.add_helper(dispatcher)
+        except KeyError:
+            pass
+
         self.helpers.append(dispatcher(self))
 
     def drop_frags(self):
@@ -540,6 +548,24 @@ class ProgPort(AbstractProgram):
         super().__init__(match_object=match_object, frags=frags, attribs=attribs)
         self.attribs["name"] = "port"
 
+class ProgPortRange(AbstractProgram):
+    '''Basic match on IP - any shape or form,
+       added before matching on address, proto, etc.
+    '''
+    def __init__(self, match_object=None, frags=None, attribs=None):
+
+        super().__init__(match_object=match_object, frags=frags, attribs=attribs)
+        self.attribs["name"] = "portrange"
+
+        newfrags = []
+        for frag in self.frags:
+            if isinstance(frag, ProgArOp):
+                self.attribs["loc"] = frag.frags
+            else:
+                newfrags.append(frag)
+        self.attribs["frags"] = newfrags
+
+
 class ProgIPv4(AbstractProgram):
     '''Basic match on v4 address or network.
     '''
@@ -788,7 +814,7 @@ JUMPTABLE = {
     "tcp6":ProgTCP6,
     "udp6":ProgUDP6,
     "port":ProgPort,
-    "port":ProgPort,
+    "portrange":ProgPortRange,
     "ipv4":ProgIPv4,
     "ipv6":ProgIPv6,
     "not":ProgNOT,

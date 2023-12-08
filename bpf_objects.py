@@ -543,6 +543,65 @@ class CBPFProgPort(CBPFHelper):
             code.append(JEQ([self.pcap_obj.frags[0].result, self.on_success, self.on_failure], mode=7))
         self.add_code(code)
 
+class CBPFProgPortRange(CBPFHelper):
+    '''Portrange.
+    '''
+    def compile(self, compiler_state=None):
+        '''Compile the code'''
+
+        code = []
+
+        super().compile(compiler_state)
+
+        left = self.attribs["loc"][0]
+        right = self.attribs["loc"][1]
+
+        left_stash = None
+        right_stash = None
+
+        left.compile(compiler_state)
+
+        if left.result is None:
+            left_stash = compiler_state.next_free_reg()
+            left.add_code([ST([left_stash], mode=3)], self.helper_id)
+            self.add_code(left.get_code(self.helper_id))
+
+        right.compile(compiler_state)
+
+        if right.result is None:
+            right_stash = compiler_state.next_free_reg()
+            right.add_code([ST([right_stash], mode=3)], self.helper_id)
+            self.add_code(right.code)
+
+        self.compile_offsets(compiler_state)
+
+        if "src" in self.pcap_obj.quals:
+            code.append(
+                LD([compiler_state.offset], size=2, mode=2)
+            )
+
+        if "dst" in self.pcap_obj.quals:
+            code.append(
+                LD([compiler_state.offset + 2], size=2, mode=2)
+            )
+
+        if left_stash is not None:
+            code.append(LD([left_stash], reg="x", mode=3))
+            code.append(JGE([self.on_success, self.on_failure], mode=8))
+            compiler_state.release(left_stash)
+        else:
+            code.append(JGE([left.result, f"_portrange_next_{self.loc}", self.on_failure], mode=7))
+
+        if right_stash is not None:
+            code.append(LD([right_stash], reg="x", mode=3, label=f"_portrange_next_{self.loc}"))
+            code.append(JGT([self.on_failure, self.on_success], mode=8))
+            compiler_state.release(right_stash)
+        else:
+            code.append(JGT([right.result, self.on_failure, self.on_success], mode=7, label=f"_portrange_next_{self.loc}"))
+
+        self.add_code(code)
+
+
 class CBPFProgIPv4(CBPFHelper):
     '''Basic match on v4 address or network.
     '''
