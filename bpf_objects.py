@@ -9,10 +9,11 @@ Compiler backends.
 #
 
 import sys
+import struct
 import re
+import ipaddress
 from header_constants import ETHER, IP, IP6, ETH_PROTOS, IP_PROTOS
 from code_objects import AbstractCode, AbstractHelper, NEXT_MATCH, FAIL, SUCCESS, LAST_INSN, Immediate
-import ipaddress
 
 
 IPV4_REGEXP = re.compile(r"(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})")
@@ -33,6 +34,61 @@ FORMATS = [
     "a/%a",                   # 11 accumulator
     "0x{:04X}"                # 12 extensions
 ]
+
+BPF_LD      =   0x00
+BPF_LDX     =   0x01
+BPF_ST      =   0x02
+BPF_STX     =   0x03
+BPF_ALU	    =   0x04
+BPF_JMP     =   0x05
+BPF_RET     =   0x06
+BPF_MISC    =   0x07
+
+# ld/ldx fields
+# define BPF_SIZE(code)  ((code) & 0x18)
+BPF_W       = 0x00      # 32-bit
+BPF_H		= 0x08      # 16-bit
+BPF_B	    = 0x10      # 8-bit
+#eBPF		BPF_DW		0x18    64-bit
+
+#define BPF_MODE(code)  ((code) & 0xe0)
+
+BPF_IMM		=   0x00 # 4
+BPF_ABS		=   0x20 # 1
+BPF_IND		=   0x40 # 2
+BPF_MEM		=   0x60 # 3
+BPF_LEN		=   0x80 # packet length - special
+BPF_MSH		=   0xa0 # 5
+
+# alu/jmp fields
+# define BPF_OP(code)    ((code) & 0xf0)
+BPF_ADD		=   0x00
+BPF_SUB		=   0x10
+BPF_MUL		=   0x20
+BPF_DIV		=   0x30
+BPF_OR		=   0x40
+BPF_AND		=   0x50
+BPF_LSH		=   0x60
+BPF_RSH		=   0x70
+BPF_NEG		=   0x80
+BPF_MOD		=   0x90
+BPF_XOR		=   0xa0
+
+BPF_JA		=   0x00
+BPF_JEQ		=   0x10
+BPF_JGT		=   0x20
+BPF_JGE		=   0x30
+BPF_JSET    =   0x40
+#BPF_SRC(code)   ((code) & 0x08)
+BPF_K		=   0x00
+BPF_X		=   0x08
+
+
+#define BPF_MISCOP(code) ((code) & 0xf8)
+BPF_TAX     =   0x00
+BPF_TXA     =   0x80
+
+PACKER = struct.Struct(r"=HBBI")
 
 class CBPFCompilerState():
     '''CBPF Specific compiler state'''
@@ -69,6 +125,24 @@ class CBPFCompilerState():
 
 SIZE_MODS = [None, "b", "h", None, ""]
 PARENT_NEXT = "__parent_next"
+SIZE_OBJ_MODS = [0, 0x10, 0x8, 0, 0]
+FORMATS = [
+    "x/%x",                   # 0  register x
+    "[0x{:04X}]",             # 1  offset k in the packet
+    "[x + 0x{:04X}]",         # 2  offset k + x in the packet
+    "M[0x{:04X}]",            # 3  offset k in M
+    "#0x{:04X}",              # 4  k literal
+    "4*([0x{:04X}]&0xf)",     # 5  Lower nibble * 4 at byte offset k in the packet ???
+    "0x{:04X}",               # 6  Label
+    "#0x{:04X} jt {} jf {} ", # 7  #k, jt, jf
+    "x/%x jt {} jf {}",       # 8  x, jt, jf
+    "#0x{:04X} jt {}",        # 9  #k, jt
+    "x/%x jt {}",             # 10 x, jt
+    "a/%a",                   # 11 accumulator
+    "0x{:04X}"                # 12 extensions
+]
+
+ADDR_OBJ_MODS = [BPF_IMM, BPF_ABS, BPF_IND, BPF_MEM, BPF_IMM, BPF_MSH, 0, 0, 0, 0, 0, 0, 0]
 
 class CBPFCode(AbstractCode):
     '''BPF variant of code generation'''
@@ -79,11 +153,32 @@ class CBPFCode(AbstractCode):
         self.mode = mode
         self.reg = reg
         self.size = size
+        self.opcode_class = 0
 
     def __eq__(self, other):
         '''Equal - needed for tests'''
         return super().__eq__(other) and self.code == other.code and \
                self.values == other.values and self.mode == other.mode
+
+    def obj_dump(self, counter):
+        '''Dump bytecode'''
+
+        bpf_jt = 0
+        bpf_jf = 0
+        value = self.values[0]
+
+        if self.opcode_class & 0x7 == 5:
+            bpf_jt = self.values[1] - counter - 1
+            bpf_jf = self.values[2] - counter - 1
+
+        opcode = self.opcode_class + SIZE_OBJ_MODS[self.size] + ADDR_OBJ_MODS[self.mode]
+
+        if len(self.reg) > 0:
+            opcode += BPF_X
+
+        if bpf_jt > 255 or bpf_jf > 255:
+            raise ValueError(f"A jump of {bpf_jt} {bpf_jf} is a jump too far")
+        return (opcode, bpf_jt, bpf_jf, value)
 
     def __str__(self):
         '''Same as repr'''
@@ -124,26 +219,45 @@ class CBPFCode(AbstractCode):
         return f"code_objects.{name}({self.values}, size={self.size}, mode={self.mode}, label={self.labels})"
 
 class LD(CBPFCode):
-    '''Load into A or X'''
+    '''Load into A'''
     def __init__(self, values, reg="", size=4, mode=None, label=None):
-        if reg == "x":
-            self.check_mode(mode, [3, 4, 5, 12])
-        else:
-            self.check_mode(mode, [1, 2, 3, 4, 12])
+        self.check_mode(mode, [1, 2, 3, 4, 12])
         super().__init__(code="ld", reg=reg, size=size, mode=mode, label=label)
         self.set_values(values)
+        self.opcode_class = 0x0
+
+class LDX(CBPFCode):
+    '''Load into X'''
+    def __init__(self, values, reg="", size=4, mode=None, label=None):
+        self.check_mode(mode, [3, 4, 5, 12])
+        super().__init__(code="ld", reg=reg, size=size, mode=mode, label=label)
+        self.set_values(values)
+        self.opcode_class = 0x1
+
 
 class ST(CBPFCode):
-    '''Store from A or X'''
+    '''Store from A'''
     def __init__(self, values, reg="", size=4, mode=0, label=None):
         super().__init__(code="st", reg=reg, size=size, mode=mode, label=label)
+        self.check_mode(mode, [3])
         self.set_values(values)
+        self.opcode_class = 0x2
+
+class STX(CBPFCode):
+    '''Store from X'''
+    def __init__(self, values, reg="", size=4, mode=0, label=None):
+        super().__init__(code="st", reg=reg, size=size, mode=mode, label=label)
+        self.check_mode(mode, [3])
+        self.set_values(values)
+        self.opcode_class = 0x3
+
 
 class Jump(CBPFCode):
     '''Generic Jump.'''
     def __init__(self, code=None, values=None, mode=6, label=None, size=4):
         super().__init__(code=code, mode=mode, label=label)
         self.set_values(values)
+        self.opcode_class = 0x5
 
     def resolve_refs(self, old_label, new_label):
         '''Update refs'''
@@ -177,41 +291,50 @@ class JEQ(CondJump):
     '''Jump on equal'''
     def __init__(self, values, mode=None, label=None, size=4):
         super().__init__(values, code="jeq", mode=mode, label=label, size=size)
+        self.opcode_class += BPF_JEQ
 
-class JNEQ(CondJump):
-    '''Jump on not equal'''
-    def __init__(self, values, mode=None, label=None, size=4):
-        super().__init__(values, code="jneq", mode=mode, label=label, size=size)
+def JNEQ(values, mode=None, label=None, size=4):
+    '''Emulate JNEQ via inverse JEQ'''
+    tmp = values[0]
+    values[0] = values[1]
+    values[1] = tmp
+    return JEQ(values, mode=mode, label=label, size=size)
 
-class JNE(CondJump):
-    '''Jump on not equal'''
-    def __init__(self, values, mode=None, label=None, size=4):
-        super().__init__(values, code="jne", mode=mode, label=label, size=size)
+def JNE(values, mode=None, label=None, size=4):
+    '''Ditto - emulate JNE'''
+    return JNEQ(values, mode=mode, label=label, size=size)
 
-class JLT(CondJump):
-    '''Jump on less then'''
-    def __init__(self, values, mode=None, label=None, size=4):
-        super().__init__(values, code="jlt", mode=mode, label=label, size=size)
+def JLT(values, mode=None, label=None, size=4):
+    '''Emulate JLT via JGE'''
+    tmp = values[0]
+    values[0] = values[1]
+    values[1] = tmp
+    return JGE(values, mode=mode, label=label, size=size)
 
-class JLE(CondJump):
-    '''Jump on less or equal'''
-    def __init__(self, values, mode=None, label=None, size=4):
-        super().__init__(values, code="jlt", mode=mode, label=label, size=size)
+def JLE(values, mode=None, label=None, size=4):
+    '''Emulate JLT via JGE'''
+    tmp = values[0]
+    values[0] = values[1]
+    values[1] = tmp
+    return JGT(values, mode=mode, label=label, size=size)
 
 class JGT(CondJump):
     '''Jump on greater'''
     def __init__(self, values, mode=None, label=None, size=4):
         super().__init__(values, code="jgt", mode=mode, label=label, size=size)
+        self.opcode_class += BPF_JGT
 
 class JGE(CondJump):
     '''Jump on greater or equal'''
     def __init__(self, values, mode=None, label=None, size=4):
         super().__init__(values, code="jge", mode=mode, label=label, size=size)
+        self.opcode_class += BPF_JGE
 
 class JSET(CondJump):
     '''Jump on a set bit'''
     def __init__(self, values, mode=None, label=None, size=4):
         super().__init__(values, code="jset", mode=mode, label=label, size=size)
+        self.opcode_class += BPF_JSET
 
 class Arithmetics(CBPFCode):
     '''Generic arithmetic instruction'''
@@ -219,71 +342,86 @@ class Arithmetics(CBPFCode):
         self.check_mode(mode, [0, 4])
         super().__init__(code=code, mode=mode, label=label, size=size)
         self.set_values(values)
+        self.opcode_class += BPF_ALU
 
 class ADD(Arithmetics):
     '''ADD instruction'''
     def __init__(self, values, mode=None, label=None, size=4):
         super().__init__(values, code="add", mode=mode, label=label, size=size)
+        self.opcode_class += BPF_ADD
 
 class SUB(Arithmetics):
     '''SUB instruction'''
     def __init__(self, values, mode=None, label=None, size=4):
         super().__init__(values, code="sub", mode=mode, label=label, size=size)
+        self.opcode_class += BPF_SUB
 
 class MUL(Arithmetics):
     '''MUL instruction'''
     def __init__(self, values, mode=None, label=None, size=4):
         super().__init__(values, code="mul", mode=mode, label=label, size=size)
+        self.opcode_class += BPF_MUL
 
 class DIV(Arithmetics):
     '''DIV instruction'''
     def __init__(self, values, mode=None, label=None, size=4):
         super().__init__(values, code="div", mode=mode, label=label, size=size)
+        self.opcode_class += BPF_DIV
 
 class MOD(Arithmetics):
     '''MOD instruction'''
     def __init__(self, values, mode=None, label=None, size=4):
         super().__init__(values, code="mod", mode=mode, label=label, size=size)
+        self.opcode_class += BPF_MOD
 
 class AND(Arithmetics):
     '''Arithmetic AND instruction'''
     def __init__(self, values, mode=None, label=None, size=4):
         super().__init__(values, code="and", mode=mode, label=label, size=size)
+        self.opcode_class += BPF_AND
 
 class OR(Arithmetics):
     '''Arithmetic OR instruction'''
     def __init__(self, values, mode=None, label=None, size=4):
         super().__init__(values, code="or", mode=mode, label=label, size=size)
+        self.opcode_class += BPF_OR
 
 class XOR(Arithmetics):
     '''Arithmetic XOR instruction'''
     def __init__(self, values, mode=None, label=None, size=4):
         super().__init__(values, code="xor", mode=mode, label=label, size=size)
+        self.opcode_class += BPF_XOR
 
 class LSH(Arithmetics):
     '''LSH instruction'''
     def __init__(self, values, mode=None, label=None, size=4):
         super().__init__(values, code="lsh", mode=mode, label=label, size=size)
+        self.opcode_class += BPF_LSH
 
 class RSH(Arithmetics):
     '''RSH instruction'''
     def __init__(self, values, mode=None, label=None, size=4):
         super().__init__(values, code="rsh", mode=mode, label=label, size=size)
+        self.opcode_class += BPF_RSH
 
 class NEG(CBPFCode):
     '''NEG instruction'''
     def __init__(self, label=None, size=4):
         super().__init__(code="neg", label=label, size=size)
+        self.opcode_class += BPF_NEG
 
 class TAX(CBPFCode):
     '''Transfer A to X'''
     def __init__(self, label=None, size=4):
         super().__init__(code="tax", label=label, size=size)
+        self.opcode_class = BPF_MISC+BPF_TAX
+
 
 class TXA(CBPFCode):
     '''Transfer X to A'''
     def __init__(self, label=None, size=4):
         super().__init__(code="txa", label=label, size=size)
+        self.opcode_class = BPF_MISC+BPF_TXA
 
 class RET(CBPFCode):
     '''RET with result.
@@ -294,6 +432,7 @@ class RET(CBPFCode):
         self.check_mode(mode, [4, 11])
         super().__init__(code="ret", mode=mode, label=label, size=size)
         self.set_values(values)
+        self.opcode_class = BPF_RET
 
 
 V4_NET_REGEXP = re.compile(r"(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\/(\d{1,2})")
@@ -312,7 +451,7 @@ class CBPFHelper(AbstractHelper):
             return self.attribs["offset"]
         except KeyError:
             return 0
-    
+
 
     @property
     def loc(self):
@@ -659,7 +798,7 @@ class CBPFProgIPv6(CBPFHelper):
         except ValueError:
             # we let it raise a value error in this case
             addr = ipaddress.ip_network(self.match_object)
-        
+
         location = None
 
         super().compile(compiler_state)
@@ -693,7 +832,7 @@ class CBPFProgIPv6(CBPFHelper):
                 else:
                     next_label = self.on_success
                 code.extend([
-                    LD(location + nibble * 4, size=4, mode=1, label=f"_v6_{self.loc}_{nibble}"), 
+                    LD(location + nibble * 4, size=4, mode=1, label=f"_v6_{self.loc}_{nibble}"),
                     AND(int.from_bytes(netmask[nibble*4:nibble*4 + 4]), mode=4),
                     JEQ([int.from_bytes(address[nibble*4:nibble*4 + 4]), next_label, self.on_failure], mode=7)
                 ])
@@ -705,7 +844,7 @@ class CBPFProgIPv6(CBPFHelper):
                 else:
                     next_label = self.on_success
                 code.extend([
-                    LD(location + nibble * 4, size=4, mode=1, label=f"_v6_{self.loc}_{nibble}"), 
+                    LD(location + nibble * 4, size=4, mode=1, label=f"_v6_{self.loc}_{nibble}"),
                     JEQ([int.from_bytes(address[nibble*4:nibble*4 + 4]), next_label, self.on_failure], mode=7)
                 ])
         self.add_code(code)
@@ -824,7 +963,7 @@ COMPUTE_TABLE = {
     "&" : lambda x, y: x & y,
     "|" : lambda x, y: x | y,
     "^" : lambda x, y: x ^ y,
-    "<<" : lambda x, y: x << y, 
+    "<<" : lambda x, y: x << y,
     ">>" : lambda x, y: x >> y,
     "<" : lambda x, y: x < y,
     ">" : lambda x, y: x > y,

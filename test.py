@@ -18,7 +18,11 @@ def main():
         help='pcap expression',
         type=str
         )
-    
+    aparser.add_argument(
+       '--output',
+        help='binary output',
+        type=str
+        )
     aparser.add_argument(
        '--format',
         help='output format',
@@ -50,6 +54,20 @@ def main():
     for inst in parsed.get_code("cbpf"):
         print("{} {}".format(counter, inst))
         counter += 1
+
+
+    try:
+        outfile = open(args["output"], "w+")
+        code = parsed.get_code("cbpf")
+        outfile.write("{}".format(len(code)))
+        res = []
+        counter = 0
+        for insn in code:
+            outfile.write(", {} {} {} {}".format(*insn.obj_dump(counter)))
+            counter += 1
+        outfile.close()
+    except KeyError:
+        pass
 
 
 

@@ -66,6 +66,10 @@ class AbstractCode(dict):
         '''Check if instruction has a label'''
         return label in self.labels
 
+    def obj_dump(self):
+        '''Dump object code'''
+        return None
+
     def add_label(self, label):
         '''Add a label'''
         if label is None:
@@ -344,6 +348,15 @@ class AbstractProgram():
                 NEXT_MATCH, self.frags[index + 1].get_start_label())
 
         self.compiled = True
+
+    def obj_dump(self):
+        '''Dump "opcodes"'''
+        if not self.compiled:
+            return None
+        result = []
+        for ins in self.get_code():
+            result.append(ins.obj_dump())
+        return result
 
     def compile_offsets(self, branch_state=None):
         '''Compile the code and mark it as compiled'''
