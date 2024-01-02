@@ -41,7 +41,7 @@ def p_binary_operators(p):
     if p[2].lower() == 'or':
         p[0] = code_objects.ProgOR(left=p[1], right=p[3])
     else:
-        p[0] = code_objects.ProgAND["and"](left=p[1], right=p[3])
+        p[0] = code_objects.ProgAND(left=p[1], right=p[3])
 
 def p_comparisons(p):
     '''comparisons : arth LESS arth

@@ -65,6 +65,7 @@ def main():
         for insn in code:
             outfile.write(", {} {} {} {}".format(*insn.obj_dump(counter)))
             counter += 1
+        outfile.write("\n")
         outfile.close()
     except KeyError:
         pass

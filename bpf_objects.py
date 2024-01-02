@@ -173,9 +173,6 @@ class CBPFCode(AbstractCode):
 
         opcode = self.opcode_class + SIZE_OBJ_MODS[self.size] + ADDR_OBJ_MODS[self.mode]
 
-        if len(self.reg) > 0:
-            opcode += BPF_X
-
         if bpf_jt > 255 or bpf_jf > 255:
             raise ValueError(f"A jump of {bpf_jt} {bpf_jf} is a jump too far")
         return (opcode, bpf_jt, bpf_jf, value)
@@ -220,17 +217,17 @@ class CBPFCode(AbstractCode):
 
 class LD(CBPFCode):
     '''Load into A'''
-    def __init__(self, values, reg="", size=4, mode=None, label=None):
+    def __init__(self, values, size=4, mode=None, label=None):
         self.check_mode(mode, [1, 2, 3, 4, 12])
-        super().__init__(code="ld", reg=reg, size=size, mode=mode, label=label)
+        super().__init__(code="ld", reg="", size=size, mode=mode, label=label)
         self.set_values(values)
         self.opcode_class = 0x0
 
 class LDX(CBPFCode):
     '''Load into X'''
-    def __init__(self, values, reg="", size=4, mode=None, label=None):
+    def __init__(self, values, size=4, mode=None, label=None):
         self.check_mode(mode, [3, 4, 5, 12])
-        super().__init__(code="ld", reg=reg, size=size, mode=mode, label=label)
+        super().__init__(code="ld", reg="x", size=size, mode=mode, label=label)
         self.set_values(values)
         self.opcode_class = 0x1
 
@@ -608,7 +605,7 @@ class CBPFProgIP(CBPFHelper):
         '''Compile offset past IP Headers'''
         super().compile_offsets(compiler_state)
         self.add_offset_code([
-            LD([compiler_state.offset], size=1, mode=5, reg="x")
+            LDX([compiler_state.offset], size=1, mode=5)
         ])
 
 class CBPFProgIP6(CBPFHelper):
@@ -656,7 +653,7 @@ class CBPFProgPort(CBPFHelper):
         super().compile(compiler_state)
 
         code = [
-            LD([compiler_state.offset], size=1, mode=5, reg="x")
+            LDX([compiler_state.offset], size=1, mode=5)
         ]
 
         if self.pcap_obj.frags[0].result is None:
@@ -675,12 +672,15 @@ class CBPFProgPort(CBPFHelper):
             )
 
         if self.pcap_obj.frags[0].result is None:
-            code.append(LD([self.stashed_in], reg="x", mode=3))
+            code.append(LDX([self.stashed_in], mode=3))
             code.append(JEQ([self.on_success, self.on_failure], mode=8))
             compiler_state.release(self.stashed_in)
         else:
             code.append(JEQ([self.pcap_obj.frags[0].result, self.on_success, self.on_failure], mode=7))
+            # add labels for immediate ops to self
         self.add_code(code)
+        self.pcap_obj.get_code(self.helper_id)[0].add_label("__start__{}".format(self.frags[0].loc))
+        self.pcap_obj.get_code(self.helper_id)[-1].add_label("__end__{}".format(self.frags[0].loc))
 
 class CBPFProgPortRange(CBPFHelper):
     '''Portrange.
@@ -725,14 +725,14 @@ class CBPFProgPortRange(CBPFHelper):
             )
 
         if left_stash is not None:
-            code.append(LD([left_stash], reg="x", mode=3))
+            code.append(LDX([left_stash], mode=3))
             code.append(JGE([self.on_success, self.on_failure], mode=8))
             compiler_state.release(left_stash)
         else:
             code.append(JGE([left.result, f"_portrange_next_{self.loc}", self.on_failure], mode=7))
 
         if right_stash is not None:
-            code.append(LD([right_stash], reg="x", mode=3, label=f"_portrange_next_{self.loc}"))
+            code.append(LDX([right_stash], mode=3, label=f"_portrange_next_{self.loc}"))
             code.append(JGT([self.on_failure, self.on_success], mode=8))
             compiler_state.release(right_stash)
         else:
@@ -998,7 +998,7 @@ class CBPFProgComp(CBPFHelper):
 
         if left.result is None and right.result is None:
             self.add_code([
-                LD([self.left.stashed_in], reg="x", mode=3),
+                LDX([self.left.stashed_in], mode=3),
                 COMP_TABLE[self.attribs["op"]]([self.stashed_in, self.on_success, self.on_failure], mode=3)
             ])
 
@@ -1057,7 +1057,7 @@ class CBPFProgArOp(CBPFHelper):
             stashed_in = compiler_state.next_free_reg()
             left.add_code([ST([self.stashed_in], mode=3)], self.helper_id)
             self.add_code([
-                    LD([stashed_in], reg="x", mode=3),
+                    LDX([stashed_in], mode=3),
                     ARITH_TABLE[self.attribs["op"]](mode=0)
                 ])
 
