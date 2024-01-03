@@ -142,11 +142,11 @@ FORMATS = [
     "0x{:04X}"                # 12 extensions
 ]
 
-ADDR_OBJ_MODS = [BPF_IMM, BPF_ABS, BPF_IND, BPF_MEM, BPF_IMM, BPF_MSH, 0, 0, 0, 0, 0, 0, 0]
+ADDR_OBJ_MODS = [BPF_X, BPF_ABS, BPF_IND, BPF_MEM, BPF_IMM, BPF_MSH, 0, 0, 0, 0, 0, 0, 0]
 
 class CBPFCode(AbstractCode):
     '''BPF variant of code generation'''
-    def __init__(self, code="", reg="", size=4, mode=None, label=None):
+    def __init__(self, code="", reg="", size=4, mode=0, label=None):
         super().__init__(label=label)
         self.code = code + reg
         self.code += SIZE_MODS[size]
@@ -165,13 +165,22 @@ class CBPFCode(AbstractCode):
 
         bpf_jt = 0
         bpf_jf = 0
-        value = self.values[0]
+        value = 0
+        try:
+            value = self.values[0]
+        except IndexError:
+            pass
+
+            
 
         if self.opcode_class & 0x7 == 5:
             bpf_jt = self.values[1] - counter - 1
             bpf_jf = self.values[2] - counter - 1
 
-        opcode = self.opcode_class + SIZE_OBJ_MODS[self.size] + ADDR_OBJ_MODS[self.mode]
+        if self.opcode_class == BPF_MISC+BPF_TAX or self.opcode_class == BPF_MISC+BPF_TXA:
+            opcode = self.opcode_class
+        else:
+            opcode = self.opcode_class + SIZE_OBJ_MODS[self.size] + ADDR_OBJ_MODS[self.mode]
 
         if bpf_jt > 255 or bpf_jf > 255:
             raise ValueError(f"A jump of {bpf_jt} {bpf_jf} is a jump too far")
@@ -187,6 +196,8 @@ class CBPFCode(AbstractCode):
 
         res += "\t" + self.code
 
+        if self.code == "tax" or self.code == "txa":
+            return res
 
         if self.mode is not None:
             try:
@@ -680,7 +691,7 @@ class CBPFProgPort(CBPFHelper):
             # add labels for immediate ops to self
         self.add_code(code)
         self.pcap_obj.get_code(self.helper_id)[0].add_label("__start__{}".format(self.frags[0].loc))
-        self.pcap_obj.get_code(self.helper_id)[-1].add_label("__end__{}".format(self.frags[0].loc))
+        self.pcap_obj.get_code(self.helper_id)[-1].add_label("__end__{}".format(self.frags[-1].loc))
 
 class CBPFProgPortRange(CBPFHelper):
     '''Portrange.
@@ -739,6 +750,8 @@ class CBPFProgPortRange(CBPFHelper):
             code.append(JGT([right.result, self.on_failure, self.on_success], mode=7, label=f"_portrange_next_{self.loc}"))
 
         self.add_code(code)
+        self.pcap_obj.get_code(self.helper_id)[0].add_label("__start__{}".format(self.frags[0].loc))
+        self.pcap_obj.get_code(self.helper_id)[-1].add_label("__end__{}".format(self.frags[-1].loc))
 
 
 class CBPFProgIPv4(CBPFHelper):
@@ -940,6 +953,8 @@ class CBPFProgLoad(CBPFHelper):
                 self.add_code([LD([self.pcap_obj.attribs["loc"].attribs["match_object"] + compiler_state.offset], size=self.pcap_obj.attribs["size"], mode=2)])
             else:
                 self.add_code([LD([self.pcap_obj.attribs["loc"].attribs["match_object"] + compiler_state.offset], size=self.pcap_obj.attribs["size"], mode=1)])
+        self.pcap_obj.get_code(self.helper_id)[0].add_label("__start__{}".format(self.frags[0].loc))
+        self.pcap_obj.get_code(self.helper_id)[-1].add_label("__end__{}".format(self.frags[-1].loc))
 
 class CBPFProgIndexLoad(CBPFHelper):
     '''Perform arithmetic operations.
@@ -1019,6 +1034,8 @@ class CBPFProgComp(CBPFHelper):
 
         if stashed_in is not None:
             compiler_state.release(stashed_in)
+        self.pcap_obj.get_code(self.helper_id)[0].add_label("__start__{}".format(self.frags[0].loc))
+        self.pcap_obj.get_code(self.helper_id)[-1].add_label("__end__{}".format(self.frags[-1].loc))
 
 class CBPFImmediate(CBPFHelper):
     '''Fake leafe for immediate ops
@@ -1076,6 +1093,8 @@ class CBPFProgArOp(CBPFHelper):
 
         if stashed_in is not None:
             compiler_state.release(stashed_in)
+        self.pcap_obj.get_code(self.helper_id)[0].add_label("__start__{}".format(self.frags[0].loc))
+        self.pcap_obj.get_code(self.helper_id)[-1].add_label("__end__{}".format(self.frags[-1].loc))
 
 def dispatcher(obj):
     '''Return the correct code helper'''
