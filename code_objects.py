@@ -12,6 +12,7 @@ import json
 from header_constants import ETH_PROTOS, IP_PROTOS
 
 NEXT_MATCH = "__next_match"
+PARENT_NEXT = "__parent_next"
 LAST_INSN = "__last_insn"
 SUCCESS = "__success"
 FAIL = "__fail"
@@ -346,6 +347,8 @@ class AbstractProgram():
         for index in range(0, len(self.frags) - 1):
             self.frags[index].replace_value(
                 NEXT_MATCH, self.frags[index + 1].get_start_label())
+            for nested_frag in self.frags[index].frags:
+                nested_frag.replace_value(PARENT_NEXT, self.frags[index + 1].get_start_label())
 
         self.compiled = True
 
@@ -677,8 +680,8 @@ class ProgOR(AbstractProgram):
     '''
     def __init__(self, left=None, right=None, attribs=None):
         if attribs is None:
-            self.right = AbstractProgram(frags=right)
-            self.left = AbstractProgram(frags=left)
+            self.right = right
+            self.left = left
             super().__init__(frags=[self.left, self.right])
         else:
             super().__init__(attribs=attribs)
@@ -691,8 +694,8 @@ class ProgAND(AbstractProgram):
     '''
     def __init__(self, left=None, right=None, attribs=None):
         if attribs is None:
-            self.right = AbstractProgram(frags=right)
-            self.left = AbstractProgram(frags=left)
+            self.right = right
+            self.left = left
             super().__init__(frags=[self.left, self.right])
         else:
             super().__init__(attribs=attribs)

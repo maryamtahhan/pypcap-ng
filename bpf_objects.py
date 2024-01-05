@@ -13,7 +13,7 @@ import struct
 import re
 import ipaddress
 from header_constants import ETHER, IP, IP6, ETH_PROTOS, IP_PROTOS
-from code_objects import AbstractCode, AbstractHelper, NEXT_MATCH, FAIL, SUCCESS, LAST_INSN, Immediate
+from code_objects import AbstractCode, AbstractHelper, NEXT_MATCH, FAIL, SUCCESS, LAST_INSN, Immediate, PARENT_NEXT
 
 
 IPV4_REGEXP = re.compile(r"(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})")
@@ -887,8 +887,10 @@ class CBPFProgOR(CBPFHelper):
         compiler_state.offset = offset
         self.right.compile(compiler_state)
 
-        self.frags[0].replace_value(self.frags[1].get_start_label(), NEXT_MATCH)
-        self.frags[0].replace_value(FAIL, self.frags[1].get_start_label())
+        label = self.frags[1].get_start_label()
+
+        self.frags[0].replace_value(NEXT_MATCH, PARENT_NEXT)
+        self.frags[0].replace_value(FAIL, label)
 
 
 class CBPFProgAND(CBPFHelper):
