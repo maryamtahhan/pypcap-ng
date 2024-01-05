@@ -26,8 +26,9 @@ def main():
         )
     aparser.add_argument(
        '--debug',
-        help='debug',
-        type=bool
+        help='debug level',
+        type=int,
+        default=0
         )
     aparser.add_argument(
        '--output',
@@ -49,11 +50,6 @@ def main():
     args = vars(aparser.parse_args())
 
     try:
-        debug = args["debug"]
-    except KeyError:
-        debug = False
-
-    try:
         generators = args["generators"]
     except KeyError:
         generators = ["cbpf"]
@@ -63,7 +59,7 @@ def main():
 
     parsed = finalize(pcap_parser.PARSER.parse(args["expression"]))
 
-    if debug:
+    if args["debug"] > 0:
         sys.stderr.write(json.dumps(parsed, cls=ProgramEncoder, indent=4))
         sys.stderr.write("\n")
 
@@ -72,7 +68,7 @@ def main():
 
     parsed.compile(bpf_objects.CBPFCompilerState()) # FIXME - make generic
 
-    if debug:
+    if args["debug"] > 0:
         for generator in generators:
             counter = 0
             for inst in parsed.get_code(generator):
