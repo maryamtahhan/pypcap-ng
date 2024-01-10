@@ -212,6 +212,15 @@ class AbstractProgram():
         '''
         self.attribs["frags"] = []
 
+    def drop_type(self, obj_class):
+        '''Drop all subprograms of this class'''
+        new_frags = []
+        for frag in self.frags:
+            if not isinstance(frag, obj_class):
+                frag.drop_type(obj_class)
+                new_frags.append(frag)
+        self.frags = new_frags
+
     def __eq__(self, other):
         '''We are only interested in equality of the generated code.'''
         return self.name == other.name and \
@@ -490,7 +499,7 @@ class ProgL3(AbstractProgram):
         if attribs is not None:
             super().__init__(attribs=attribs)
         else:
-            super().__init__(match_object=match_object)
+            super().__init__(match_object=match_object, frags=[ProgIP()])
             self.attribs["name"] = "l3"
 
 class ProgL3v6(AbstractProgram):
@@ -519,12 +528,16 @@ class ProgIP6(AbstractProgram):
         super().__init__(frags=[ProgL2(match_object="ip6")], attribs=attribs)
         self.attribs["name"] = "ip6"
 
-class ProgTCP(AbstractProgram):
+class ProgTCP(ProgL3):
     '''Basic match on IP - any shape or form,
        added before matching on address, proto, etc.
     '''
     def __init__(self, attribs=None):
-        super().__init__(frags=[ProgIP(), ProgL3(match_object=IP_PROTOS["tcp"])], attribs=attribs)
+        if attribs is None:
+            super().__init__(match_object=IP_PROTOS["tcp"])
+        else:
+            super().__init__(attribs=attribs)
+        
         self.attribs["name"] = "tcp"
 
 class ProgTCP6(AbstractProgram):

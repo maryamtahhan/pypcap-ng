@@ -153,18 +153,11 @@ def p_pname(p):
         p[0] = code_objects.ProgIP()
     elif p[1] == "tcp":
         p[0] = code_objects.ProgTCP()
-    elif p[1] == "udp":
-        p[0] == code_objects.ProgUDP()
     else:
         try:
             p[0] = code_objects.ProgL2(ETH_PROTOS[p[1]])
         except KeyError:
-            p[0] = AbstractProgram(
-                        frags=[
-                            code_objects.ProgIP(),
-                            code_objects.ProgL3(match_object=IP_PROTOS[p[1]]),
-                        ]
-                    )
+            p[0] = code_objects.ProgL3(match_object=IP_PROTOS[p[1]])
 
 def p_dqual(p):
     '''dqual : SRC

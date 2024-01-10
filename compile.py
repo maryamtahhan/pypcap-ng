@@ -8,6 +8,7 @@ import json
 import pcap_parser
 from code_objects import finalize, ProgramEncoder
 import bpf_objects
+import code_objects
 
 HELPERS = {
     "cbpf":bpf_objects.dispatcher,
@@ -58,6 +59,9 @@ def main():
         generators = ["cbpf"]
 
     parsed = finalize(pcap_parser.PARSER.parse(args["expression"]))
+
+    if args["format"] == "iptables":
+        parsed.drop_type(code_objects.ProgL2)
 
     if args["debug"] > 0:
         sys.stderr.write(json.dumps(parsed, cls=ProgramEncoder, indent=4))

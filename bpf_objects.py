@@ -172,10 +172,12 @@ class CBPFCode(AbstractCode):
             pass
 
             
-
-        if self.opcode_class & 0x7 == 5:
-            bpf_jt = self.values[1] - counter - 1
-            bpf_jf = self.values[2] - counter - 1
+        try:
+            if self.opcode_class & 0x7 == 5:
+                bpf_jt = self.values[1] - counter - 1
+                bpf_jf = self.values[2] - counter - 1
+        except TypeError:
+            raise ValueError("Unresolved references jt {} jf {}".format(self.values[1], self.values[2]))
 
         if self.opcode_class == BPF_MISC+BPF_TAX or self.opcode_class == BPF_MISC+BPF_TXA:
             opcode = self.opcode_class
@@ -513,21 +515,18 @@ class CBPFHelper(AbstractHelper):
 # These are way too cBPF specific to try to make them into generic instances
 
 class CBPFAbstractProgram(CBPFHelper):
-    '''Basic match on IP - any shape or form,
-       added before matching on address, proto, etc.
+    '''Do nothing - attaches to a program which just calls subs.
     '''
 
 class CBPFProgSuccess(CBPFHelper):
-    '''Basic match on IP - any shape or form,
-       added before matching on address, proto, etc.
+    '''Success
     '''
     def compile(self, compiler_state=None):
         super().compile(compiler_state)
         self.add_code([RET(0xFFFF, label=[SUCCESS])])
 
 class CBPFProgFail(CBPFHelper):
-    '''Basic match on IP - any shape or form,
-       added before matching on address, proto, etc.
+    '''Fail
     '''
     def compile(self, compiler_state=None):
         super().compile(compiler_state)
@@ -535,8 +534,7 @@ class CBPFProgFail(CBPFHelper):
 
 
 class CBPFProgL2(CBPFHelper):
-    '''Basic match on IP - any shape or form,
-       added before matching on address, proto, etc.
+    '''Basic L2 Match
     '''
 
     def compile(self, compiler_state=None):
@@ -612,6 +610,18 @@ class CBPFProgIP(CBPFHelper):
        added before matching on address, proto, etc.
     '''
 
+    def compile(self, compiler_state=None):
+        '''We need to check IP version. As a side effect
+           This also deals with references after an L2 trim.
+        '''
+        super().compile(compiler_state=None)
+        self.add_code([
+            LD(self.offset + compiler_state.offset, size=1, mode=1),
+            RSH(4, mode=4),
+            JEQ([4, self.on_success, self.on_failure], mode=7),
+        ])
+
+
     def compile_offsets(self, compiler_state=None):
         '''Compile offset past IP Headers'''
         super().compile_offsets(compiler_state)
@@ -620,14 +630,20 @@ class CBPFProgIP(CBPFHelper):
         ])
 
 class CBPFProgIP6(CBPFHelper):
+    '''Basic match on IP6 - any shape or form,
+       added before matching on address, proto, etc.
+    '''
+
+    def compile_offsets(self, compiler_state=None):
+        '''Compile offset past IP Headers'''
+        super().compile_offsets(compiler_state)
+        compiler_state.offset = IP6["size"]
+
+class CBPFProgTCP(CBPFProgL3):
     '''Basic match on IP - any shape or form,
        added before matching on address, proto, etc.
     '''
 
-class CBPFProgTCP(CBPFHelper):
-    '''Basic match on IP - any shape or form,
-       added before matching on address, proto, etc.
-    '''
     def compile_offsets(self, compiler_state=None):
         '''Compile offset past IP Headers'''
         super().compile_offsets(compiler_state)
@@ -638,16 +654,6 @@ class CBPFProgTCP(CBPFHelper):
             ADD([], mode=0),
             TAX(),
         ])
-
-class CBPFProgTCP6(CBPFHelper):
-    '''Basic match on TCP6 - any shape or form,
-       added before matching on address, proto, etc.
-    '''
-
-class CBPFProgUDP(CBPFHelper):
-    '''Basic match on UDP - any shape or form,
-       added before matching on address, proto, etc.
-    '''
 
 class CBPFProgUDP6(CBPFHelper):
     '''Basic match on UDP6 - any shape or form,
