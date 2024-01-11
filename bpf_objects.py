@@ -12,8 +12,14 @@ import sys
 import struct
 import re
 import ipaddress
-from header_constants import ETHER, IP, IP6, ETH_PROTOS, IP_PROTOS
-from code_objects import AbstractCode, AbstractHelper, NEXT_MATCH, FAIL, SUCCESS, LAST_INSN, Immediate, PARENT_NEXT
+from header_constants import ETHER, IP, IP6, ETH_PROTOS
+from code_objects import AbstractCode, AbstractHelper, NEXT_MATCH
+from code_objects import FAIL, SUCCESS, LAST_INSN, Immediate, PARENT_NEXT
+
+
+# Some of the names are predefined. They are instruction names. We
+# should not change them.
+#pylint: disable=line-too-long, invalid-name, consider-using-f-string
 
 
 IPV4_REGEXP = re.compile(r"(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})")
@@ -94,10 +100,11 @@ class CBPFCompilerState():
     '''CBPF Specific compiler state'''
 
     def __init__(self):
+    #pylint: disable=unused-variable
         self.regfile = []
         for index in range(0,16):
             self.regfile.append(True)
-        self.offset = 0
+        self.offsets = {}
         self.quals = []
 
     def next_free_reg(self):
@@ -107,6 +114,29 @@ class CBPFCompilerState():
                 self.regfile[reg] = False
                 return reg
         raise IndexError("No free scratch registers")
+
+    def get_offset(self, elements=None):
+        '''Compute offsets for given header elements'''
+        total = 0
+        if isinstance(elements, str):
+            elements = set([elements])
+        for key, value in self.offsets.items():
+            if elements is None:
+                total += value
+            elif key in elements:
+                total += value
+        return total
+
+    def set_offset(self, element, value):
+        '''Compute offsets for given header elements'''
+        self.offsets[element] = value
+
+    def add_offset(self, element, value):
+        '''Compute offsets for given header elements'''
+        try:
+            self.offsets[element] += value
+        except KeyError:
+            self.offsets[element] = value
 
     def release(self, reg):
         '''Release stashed reg back for use'''
@@ -171,15 +201,17 @@ class CBPFCode(AbstractCode):
         except IndexError:
             pass
 
-            
         try:
             if self.opcode_class & 0x7 == 5:
                 bpf_jt = self.values[1] - counter - 1
                 bpf_jf = self.values[2] - counter - 1
-        except TypeError:
-            raise ValueError("Unresolved references jt {} jf {}".format(self.values[1], self.values[2]))
+        except TypeError as exc:
+        #pylint: disable=consider-using-f-string
+            raise ValueError(
+                "Unresolved references jt {} jf {}".format(self.values[1], self.values[2])
+            ) from exc
 
-        if self.opcode_class == BPF_MISC+BPF_TAX or self.opcode_class == BPF_MISC+BPF_TXA:
+        if self.opcode_class in [BPF_MISC+BPF_TAX, BPF_MISC+BPF_TXA]:
             opcode = self.opcode_class
         else:
             opcode = self.opcode_class + SIZE_OBJ_MODS[self.size] + ADDR_OBJ_MODS[self.mode]
@@ -198,7 +230,7 @@ class CBPFCode(AbstractCode):
 
         res += "\t" + self.code
 
-        if self.code == "tax" or self.code == "txa":
+        if self.code in ["tax", "txa"]:
             return res
 
         if self.mode is not None:
@@ -504,6 +536,11 @@ class CBPFHelper(AbstractHelper):
         '''right getter'''
         return self.pcap_obj.right
 
+    @property
+    def ip_version(self):
+        '''right getter'''
+        return self.pcap_obj.ip_version
+
     def add_code(self, code):
         '''Invoke pcap obj add_code'''
         self.pcap_obj.add_code(code, self.helper_id)
@@ -540,7 +577,7 @@ class CBPFProgL2(CBPFHelper):
     def compile(self, compiler_state=None):
 
         super().compile(compiler_state)
-        compiler_state.offset = ETHER["size"]
+        compiler_state.set_offset("L2", ETHER["size"])
 
         if isinstance(self.match_object, str):
             self.add_code([
@@ -557,7 +594,7 @@ class CBPFProgL2(CBPFHelper):
         '''L2 offset'''
         super().compile_offsets(compiler_state)
 
-        return ETHER["size"]
+        return compiler_state.get_offset("L2")
 
 
 class CBPFProg8021Q(CBPFHelper):
@@ -565,17 +602,22 @@ class CBPFProg8021Q(CBPFHelper):
     def compile(self, compiler_state=None):
 
         super().compile(compiler_state)
-        compiler_state.offset = ETHER["size"] + 4
+        compiler_state.add_offset("L2T", 4)
         self.add_code([
-            LD(self.offset + ETHER["size"] + 2, size=2, mode=1),
+            LD(self.offset + compiler_state.get_offset("L2") + 2, size=2, mode=1),
             AND(0x3F, mode=4),
             JEQ([self.match_object, self.on_success, self.on_failure], mode=7)
         ])
 
     def compile_offsets(self, compiler_state=None):
         '''802.1q offset'''
-        return super().compile_offsets(compiler_state) + 4
+        return compiler_state.get_offset(["L2", "L2T"])
 
+
+PORT = {
+    "src": 0,
+    "dst": 2
+}
 
 class CBPFProgL3(CBPFHelper):
     '''Layer 3 protocol matcher'''
@@ -584,26 +626,9 @@ class CBPFProgL3(CBPFHelper):
 
         super().compile(compiler_state)
         self.add_code([
-            LD(self.offset + compiler_state.offset + IP["proto"], size=1, mode=1),
+            LD(self.offset + compiler_state.get_offset(["L2", "L2T"]) + IP["proto"], size=1, mode=1),
             JEQ([self.match_object, self.on_success, self.on_failure], mode=7),
         ])
-
-class CBPFProgL3v6(CBPFHelper):
-    '''Layer 3 protocol matcher'''
-    def compile(self, compiler_state=None):
-        '''Compile the code'''
-
-        super().compile(compiler_state)
-        self.add_code([
-            LD(self.offset + compiler_state.offset + IP6["size"], size=1, mode=1),
-            JEQ([self.match_object, self.on_success, self.on_failure], mode=7),
-        ])
-
-
-PORT = {
-    "src": 0,
-    "dst": 2
-}
 
 class CBPFProgIP(CBPFHelper):
     '''Basic match on IP - any shape or form,
@@ -616,28 +641,23 @@ class CBPFProgIP(CBPFHelper):
         '''
         super().compile(compiler_state=None)
         self.add_code([
-            LD(self.offset + compiler_state.offset, size=1, mode=1),
+            LD(self.offset + compiler_state.get_offset(["L2", "L2T"]), size=1, mode=1),
             RSH(4, mode=4),
-            JEQ([4, self.on_success, self.on_failure], mode=7),
+            JEQ([int(self.ip_version), self.on_success, self.on_failure], mode=7),
         ])
 
 
     def compile_offsets(self, compiler_state=None):
         '''Compile offset past IP Headers'''
-        super().compile_offsets(compiler_state)
-        self.add_offset_code([
-            LDX([compiler_state.offset], size=1, mode=5)
-        ])
 
-class CBPFProgIP6(CBPFHelper):
-    '''Basic match on IP6 - any shape or form,
-       added before matching on address, proto, etc.
-    '''
-
-    def compile_offsets(self, compiler_state=None):
-        '''Compile offset past IP Headers'''
         super().compile_offsets(compiler_state)
-        compiler_state.offset = IP6["size"]
+
+        if int(self.ip_version) == 4:
+            self.add_offset_code([
+                LDX([compiler_state.get_offset(["L2", "L2T"])], size=1, mode=5)
+            ])
+        else:
+            compiler_state.set_offset("L3", 40)
 
 class CBPFProgTCP(CBPFProgL3):
     '''Basic match on IP - any shape or form,
@@ -649,16 +669,11 @@ class CBPFProgTCP(CBPFProgL3):
         super().compile_offsets(compiler_state)
 
         self.add_offset_code([
-            LD([compiler_state.offset + 12], size=1, mode=2),
+            LD([compiler_state.get_offset(["L2", "L2T", "L3"]) + 12], size=1, mode=2),
             RSH([2], mode=4),
             ADD([], mode=0),
             TAX(),
         ])
-
-class CBPFProgUDP6(CBPFHelper):
-    '''Basic match on UDP6 - any shape or form,
-       added before matching on address, proto, etc.
-    '''
 
 class CBPFProgPort(CBPFHelper):
     '''Basic match on IP - any shape or form,
@@ -670,7 +685,7 @@ class CBPFProgPort(CBPFHelper):
         super().compile(compiler_state)
 
         code = [
-            LDX([compiler_state.offset], size=1, mode=5)
+            LDX([compiler_state.get_offset(["L2", "L2T", "L3"])], size=1, mode=5)
         ]
 
         if self.pcap_obj.frags[0].result is None:
@@ -681,11 +696,11 @@ class CBPFProgPort(CBPFHelper):
 
         if "src" in self.pcap_obj.quals:
             code.append(
-                LD([compiler_state.offset], size=2, mode=2),
+                LD([compiler_state.get_offset(["L2", "L2T", "L3"])], size=2, mode=2),
             )
         if "dst" in self.pcap_obj.quals:
             code.append(
-                LD([compiler_state.offset + 2], size=2, mode=2),
+                LD([compiler_state.get_offset(["L2", "L2T", "L3"])], size=2, mode=2),
             )
 
         if self.pcap_obj.frags[0].result is None:
@@ -733,12 +748,12 @@ class CBPFProgPortRange(CBPFHelper):
 
         if "src" in self.pcap_obj.quals:
             code.append(
-                LD([compiler_state.offset], size=2, mode=2)
+                LD([compiler_state.get_offset(["L2", "L2T", "L3"])], size=2, mode=2)
             )
 
         if "dst" in self.pcap_obj.quals:
             code.append(
-                LD([compiler_state.offset + 2], size=2, mode=2)
+                LD([compiler_state.get_offset(["L2", "L2T", "L3"]) + 2], size=2, mode=2)
             )
 
         if left_stash is not None:
@@ -787,7 +802,7 @@ class CBPFProgIPv4(CBPFHelper):
 
             if isinstance(qual, str):
                 try:
-                    location = compiler_state.offset + self.offset + IP[qual]
+                    location = compiler_state.get_offset(["L2", "L2T"]) + self.offset + IP[qual]
                 except KeyError:
                     pass
                 if location is not None:
@@ -798,7 +813,6 @@ class CBPFProgIPv4(CBPFHelper):
 
         code = [LD(location, size=4, mode=1)]
         if isinstance(addr, ipaddress.IPv4Network):
-            netmask = addr.netmask
             code.extend([
                 AND(int(addr.netmask), mode=4),
                 JEQ([int(addr.network_address), self.on_success, self.on_failure], mode=7)
@@ -830,7 +844,7 @@ class CBPFProgIPv6(CBPFHelper):
 
             if isinstance(qual, str):
                 try:
-                    location = compiler_state.offset + self.offset + IP6[qual]
+                    location = compiler_state.get_offset(["L2", "L2T"]) + self.offset + IP6[qual]
                 except KeyError:
                     pass
                 if location is not None:
@@ -887,10 +901,10 @@ class CBPFProgOR(CBPFHelper):
         '''Compile OR - inverse true and false'''
 
         old_state = compiler_state.quals.copy()
-        offset = compiler_state.offset
+        offsets = compiler_state.offsets
         self.left.compile(compiler_state)
         compiler_state.quals = old_state
-        compiler_state.offset = offset
+        compiler_state.offsets = offsets
         self.right.compile(compiler_state)
 
         label = self.frags[1].get_start_label()

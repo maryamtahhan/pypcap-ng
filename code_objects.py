@@ -9,7 +9,7 @@ Compiler backends.
 #
 
 import json
-from header_constants import ETH_PROTOS, IP_PROTOS
+from header_constants import IP_PROTOS
 
 NEXT_MATCH = "__next_match"
 PARENT_NEXT = "__parent_next"
@@ -67,7 +67,8 @@ class AbstractCode(dict):
         '''Check if instruction has a label'''
         return label in self.labels
 
-    def obj_dump(self):
+    #pylint: disable=unused-argument
+    def obj_dump(self, counter):
         '''Dump object code'''
         return None
 
@@ -122,7 +123,9 @@ class AbortBranch(Exception):
 
 class AbstractProgram():
     '''Chunk of code - fragments can be matchers or other programs'''
-    def __init__(self, frags=None, attribs=None, match_object=None):
+    def __init__(self, frags=None, attribs=None, match_object=None, ip_version=4):
+
+        self.ip_version = ip_version
 
         if attribs is not None:
             self.attribs = attribs.copy()
@@ -298,7 +301,7 @@ class AbstractProgram():
         '''Update code start/end labels.
            This should be applicable to both offload and bytecode.
         '''
-        for code_id in self.code.keys():
+        for code_id in self.code:
             code = self.get_code(code_id)
             if len(code) > 0:
                 code[0].add_label(f"__start__{self.loc}")
@@ -320,7 +323,7 @@ class AbstractProgram():
         '''
         try:
             self.offset_code[code_id].extend(code)
-        except:
+        except KeyError:
             self.offset_code[code_id] = code
 
     def drop_branch(self, helper=None):
@@ -330,7 +333,7 @@ class AbstractProgram():
         if helper is not None:
             self.code[helper.helper_id] = []
         else:
-            for key in self.code.keys():
+            for key in self.code:
                 self.code[key] = []
 
     def compile(self, branch_state):
@@ -361,12 +364,12 @@ class AbstractProgram():
 
         self.compiled = True
 
-    def obj_dump(self):
+    def obj_dump(self, code_id):
         '''Dump "opcodes"'''
         if not self.compiled:
             return None
         result = []
-        for ins in self.get_code():
+        for ins in self.get_code(code_id):
             result.append(ins.obj_dump())
         return result
 
@@ -387,7 +390,7 @@ class AbstractProgram():
            all instructions.
         '''
 
-        for code_id in self.code.keys():
+        for code_id in self.code:
             for insn in self.get_code(code_id):
                 insn.replace_value(old, new)
 
@@ -446,10 +449,12 @@ class AbstractHelper():
         self.compiled = False
         self.compiled_offsets = False
 
+    #pylint: disable=unused-argument
     def compile(self, compiler_state=None):
         '''compile all code for the same helper type'''
         self.compiled = True
 
+    #pylint: disable=unused-argument
     def compile_offsets(self, compiler_state=None):
         '''compile all code for the same helper type'''
         self.compiled_offsets = True
@@ -502,31 +507,27 @@ class ProgL3(AbstractProgram):
             super().__init__(match_object=match_object, frags=[ProgIP()])
             self.attribs["name"] = "l3"
 
-class ProgL3v6(AbstractProgram):
-    '''Layer 3 protocol matcher'''
-    def __init__(self, match_object=None, attribs=None):
-        if attribs is not None:
-            super().__init__(attribs=attribs)
-        else:
-            super().__init__(match_object=match_object)
-            self.attribs["name"] = "l3v6"
-
-
 class ProgIP(AbstractProgram):
     '''Basic match on IP - any shape or form,
        added before matching on address, proto, etc.
     '''
-    def __init__(self, attribs=None):
-        super().__init__(frags=[ProgL2(match_object="ip")], attribs=attribs)
-        self.attribs["name"] = "ip"
-
-class ProgIP6(AbstractProgram):
-    '''Basic match on IP - any shape or form,
-       added before matching on address, proto, etc.
+    def __init__(self, attribs=None, ip_version=4):
+        if ip_version == 4:
+            match_object = "ip"
+        else:
+            match_object = "ip6"
+        super().__init__(frags=[ProgL2(match_object=match_object)], attribs=attribs)
+        if ip_version == 4:
+            self.attribs["name"] = "ip"
+        else:
+            self.attribs["name"] = "ip6"
+ 
+# pylint: disable=invalid-name
+def ProgIP6(attribs=None):
+    '''Constructor-like Function which invokes IP with
+       v6 parameters
     '''
-    def __init__(self, attribs=None):
-        super().__init__(frags=[ProgL2(match_object="ip6")], attribs=attribs)
-        self.attribs["name"] = "ip6"
+    return ProgIP(attribs=attribs, ip_version=6)
 
 class ProgTCP(ProgL3):
     '''Basic match on IP - any shape or form,
@@ -537,42 +538,28 @@ class ProgTCP(ProgL3):
             super().__init__(match_object=IP_PROTOS["tcp"])
         else:
             super().__init__(attribs=attribs)
-        
-        self.attribs["name"] = "tcp"
 
-class ProgTCP6(AbstractProgram):
-    '''Basic match on IP - any shape or form,
-       added before matching on address, proto, etc.
-    '''
-    def __init__(self, attribs=None):
-        super().__init__(frags=[ProgIP6(), ProgL3v6(match_object=IP_PROTOS["tcp"])], attribs=attribs)
-        self.attribs["name"] = "tcp6"
+        self.attribs["name"] = "tcp"
 
 class ProgUDP(AbstractProgram):
     '''Basic match on IP - any shape or form,
        added before matching on address, proto, etc.
     '''
-    def __init__(self, attribs=None):
-        super().__init__(frags=[ProgIP(), ProgL3(match_object=IP_PROTOS["udp"])], attribs=attribs)
+    def __init__(self, attribs=None, ip_version=4):
+        super().__init__(frags=[
+                ProgIP(ip_version=ip_version),
+                ProgL3(match_object=IP_PROTOS["udp"])
+            ], attribs=attribs)
         self.attribs["name"] = "udp"
-
-class ProgUDP6(AbstractProgram):
-    '''Basic match on IP - any shape or form,
-       added before matching on address, proto, etc.
-    '''
-    def __init__(self, attribs=None):
-        super().__init__(frags=[ProgIP6(), ProgL3v6(match_object=IP_PROTOS["udp"])], attribs=attribs)
-        self.attribs["name"] = "udp6"
-
 
 class ProgPort(AbstractProgram):
     '''Basic match on IP - any shape or form,
        added before matching on address, proto, etc.
     '''
-    def __init__(self, match_object=None, frags=None, attribs=None):
+    def __init__(self, match_object=None, frags=None, attribs=None, ip_version=4):
 
         if frags is None and attribs is None:
-            frags = [ProgIP()]
+            frags = [ProgIP(ip_version=ip_version)]
 
         super().__init__(match_object=match_object, frags=frags, attribs=attribs)
         self.attribs["name"] = "port"
@@ -598,10 +585,10 @@ class ProgPortRange(AbstractProgram):
 class ProgIPv4(AbstractProgram):
     '''Basic match on v4 address or network.
     '''
-    def __init__(self, match_object=None, attribs=None, add_ip_check=True):
+    def __init__(self, match_object=None, attribs=None, add_ip_check=True, ip_version=4):
 
         if attribs is not None:
-            super().__init__(attribs=attribs)
+            super().__init__(attribs=attribs, ip_version=ip_version)
         else:
             super().__init__(match_object=match_object)
             if add_ip_check:
@@ -621,50 +608,18 @@ class ProgIPv4(AbstractProgram):
             else:
                 self.frags.append(ProgAND(left=left, right=right))
 
-    def add_frags(self, frags):
-        '''Add frags filtering out ipv4 if present'''
-        if not isinstance(frags, list):
-            frags = [frags]
-        strip = False
-        for index in range(0, len(frags)):
-            if isinstance(frags[index], ProgTCP):
-                strip = True
-            if isinstance(frags[index], ProgUDP):
-                strip = True
-        super().add_frags(frags)
-
-        if strip:
-            self.frags = self.frags[1:]
-
 class ProgIPv6(AbstractProgram):
     '''Basic match on v6 address or network.
     '''
-    def __init__(self, match_object=None, attribs=None, add_ip_check=True):
+    def __init__(self, match_object=None, attribs=None, add_ip_check=True, ip_version=6):
 
         if attribs is not None:
-            super().__init__(attribs=attribs)
+            super().__init__(attribs=attribs, ip_version=6)
         else:
             super().__init__(match_object=match_object)
             if add_ip_check:
                 self.frags = [ProgIP6()]
         self.attribs["name"] = "ipv6"
-
-    def add_frags(self, frags):
-        '''Add frags filtering out ipv4 if present'''
-        if not isinstance(frags, list):
-            frags = [frags]
-        strip = False
-        for index in range(0, len(frags)):
-            if isinstance(frags[index], ProgTCP):
-                frags[index] = ProgTCP6()
-                strip = True
-            if isinstance(frags[index], ProgUDP):
-                frags[index] = ProgUDP6()
-                strip = True
-        super().add_frags(frags)
-
-        if strip:
-            self.frags = self.frags[1:]
 
     def add_quals(self, quals):
         '''Override add_quals to take care of "interesting" syntax'''
@@ -837,11 +792,8 @@ JUMPTABLE = {
     "ip6":ProgIP6,
     "l2":ProgL2,
     "l3":ProgL3,
-    "l3v6":ProgL3v6,
     "tcp":ProgTCP,
     "udp":ProgUDP,
-    "tcp6":ProgTCP6,
-    "udp6":ProgUDP6,
     "port":ProgPort,
     "portrange":ProgPortRange,
     "ipv4":ProgIPv4,
