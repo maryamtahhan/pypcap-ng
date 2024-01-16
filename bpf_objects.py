@@ -605,7 +605,7 @@ class CBPFProg8021Q(CBPFHelper):
         compiler_state.add_offset("L2T", 4)
         self.add_code([
             LD(self.offset + compiler_state.get_offset("L2") + 2, size=2, mode=1),
-            AND(0x3F, mode=4),
+            AND(0xFFF, mode=4),
             JEQ([self.match_object, self.on_success, self.on_failure], mode=7)
         ])
 
