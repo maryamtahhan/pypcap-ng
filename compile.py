@@ -7,11 +7,13 @@ from argparse import ArgumentParser
 import json
 import pcap_parser
 from code_objects import finalize, ProgramEncoder
-import bpf_objects
 import code_objects
+import bpf_objects
+import u32_objects
 
 HELPERS = {
     "cbpf":bpf_objects.dispatcher,
+    "u32":u32_objects.dispatcher,
 }
 
 
@@ -60,8 +62,9 @@ def main():
 
     parsed = finalize(pcap_parser.PARSER.parse(args["expression"]))
 
-    if args["format"] == "iptables":
+    if args["format"] in ["iptables", "u32"]:
         parsed.drop_type(code_objects.ProgL2)
+    
 
     if args["debug"] > 0:
         sys.stderr.write(json.dumps(parsed, cls=ProgramEncoder, indent=4))
@@ -94,16 +97,21 @@ def main():
                 counter += 1
     elif args["format"] == "iptables":
         for generator in generators:
-            try:
-                code = parsed.get_code(generator)
-                out.write("{}".format(len(code)))
-                counter = 0
-                for insn in code:
-                    out.write(", {} {} {} {}".format(*insn.obj_dump(counter)))
-                    counter += 1
+            if generator == "cbpf":
+                try:
+                    code = parsed.get_code(generator)
+                    out.write("{}".format(len(code)))
+                    counter = 0
+                    for insn in code:
+                        out.write(", {} {} {} {}".format(*insn.obj_dump(counter)))
+                        counter += 1
+                    out.write("\n")
+                except KeyError:
+                    pass
+            elif generator == "u32":
+                for insn in parsed.get_code(generator):
+                    out.write(f"{insn} ")
                 out.write("\n")
-            except KeyError:
-                pass
     else:
         sys.stderr.write("This output is not yet supported\n")
 

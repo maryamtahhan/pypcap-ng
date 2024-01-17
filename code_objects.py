@@ -225,10 +225,13 @@ class AbstractProgram():
         self.frags = new_frags
 
     def __eq__(self, other):
-        '''We are only interested in equality of the generated code.'''
+        '''By default we return non-equal'''
+
         return self.name == other.name and \
-            self.match_object == other.match_object and \
-            self.frags == other.frags
+                self.ip_version == other.ip_version and \
+                self.attribs.get("match_object") == other.attribs.get("match_object") and \
+                self.frags == other.frags and \
+                self.attribs["quals"] == other.attribs["quals"]
 
     def __repr__(self):
         '''Program (fragment) representation'''
@@ -728,6 +731,7 @@ class ProgOffset(AbstractProgram):
             super().__init__(attribs=attribs)
         self.attribs["name"] = "compute_offset"
 
+
 class ProgComp(AbstractProgram):
     '''Perform arithmetic comparisons.
     '''
@@ -740,6 +744,7 @@ class ProgComp(AbstractProgram):
         self.left = self.frags[0]
         self.right = self.frags[1]
         self.attribs["name"] = "ar_comp"
+
 
 class Immediate(AbstractProgram):
     '''Fake leaf for immediate ops
@@ -763,7 +768,6 @@ class ProgArOp(AbstractProgram):
         self.left = self.frags[0]
         self.right = self.frags[0]
         self.attribs["name"] = "ar_op"
-
 
 
 class ProgramEncoder(json.JSONEncoder):

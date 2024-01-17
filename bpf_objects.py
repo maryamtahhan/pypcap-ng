@@ -700,7 +700,7 @@ class CBPFProgPort(CBPFHelper):
             )
         if "dst" in self.pcap_obj.quals:
             code.append(
-                LD([compiler_state.get_offset(["L2", "L2T", "L3"])], size=2, mode=2),
+                LD([compiler_state.get_offset(["L2", "L2T", "L3"]) + 2], size=2, mode=2),
             )
 
         if self.pcap_obj.frags[0].result is None:
