@@ -244,9 +244,11 @@ class U32ProgIP(U32Helper):
            This also deals with references after an L2 trim.
         '''
         super().compile(compiler_state=None)
+
+        ip_version = self.pcap_obj.ip_version
         self.add_code([
             U32Code(location=compiler_state.get_offset(["L2", "L2T"]) +  self.offset,
-                    size=1, lower=4, upper=4, mask=0xFF, shift=4) 
+                    size=1, lower=ip_version, upper=ip_version, mask=0xFF, shift=4) 
         ])
 
 
@@ -408,14 +410,14 @@ class U32ProgIPv6(U32Helper):
             address = int(addr.network_address).to_bytes(16)
         else:
             address = int(addr).to_bytes(16)
-            netmask = bytes(0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            netmask = bytes([0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
                             0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
-                            0xff, 0xff) 
+                            0xff, 0xff]) 
         for nibble in range(0,4):
             value = int.from_bytes(address[nibble*4:nibble*4 + 4])
             mask = int.from_bytes(netmask[nibble*4:nibble*4 + 4])
             code.extend([
-                U32Code(location=location + nibble, size=4, mask=mask, lower=value, upper=value, shift=0) 
+                U32Code(location=location + nibble*4, size=4, mask=mask, lower=value, upper=value, shift=0) 
             ])
             if nibble < 3:
                 code.extend(U32AND())

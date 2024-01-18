@@ -515,16 +515,16 @@ class ProgIP(AbstractProgram):
        added before matching on address, proto, etc.
     '''
     def __init__(self, attribs=None, ip_version=4):
-        if ip_version == 4:
+        if attribs is None and ip_version == 4:
             match_object = "ip"
         else:
             match_object = "ip6"
-        super().__init__(frags=[ProgL2(match_object=match_object)], attribs=attribs)
+        super().__init__(frags=[ProgL2(match_object=match_object)], attribs=attribs, ip_version=ip_version)
         if ip_version == 4:
             self.attribs["name"] = "ip"
         else:
             self.attribs["name"] = "ip6"
- 
+
 # pylint: disable=invalid-name
 def ProgIP6(attribs=None):
     '''Constructor-like Function which invokes IP with
