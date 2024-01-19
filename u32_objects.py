@@ -9,12 +9,10 @@ Compiler backends - U32.
 #
 
 import sys
-import struct
 import re
 import ipaddress
 from header_constants import ETHER, IP, IP6, ETH_PROTOS
-from code_objects import AbstractCode, AbstractHelper, NEXT_MATCH
-from code_objects import FAIL, SUCCESS, LAST_INSN, Immediate, PARENT_NEXT
+from code_objects import AbstractCode, AbstractHelper
 
 
 # Some of the names are predefined. They are instruction names. We
@@ -43,13 +41,13 @@ class U32Code(AbstractCode):
 
     def obj_dump(self, counter):
         '''Dump bytecode'''
-        return f"{counter}" + self.__repr__() + "\n"
-
-    def __str__(self):
-        '''Same as repr'''
-        return self.__repr__()
+        return f"{counter} {self}\n"
 
     def __repr__(self):
+        '''Same as repr'''
+        return f"{self}"
+
+    def __str__(self):
         '''Printable form of U32 instructions'''
         if self.lower == self.upper:
             value = f"{self.lower:04x}"
@@ -81,7 +79,7 @@ class U32AND(AbstractCode):
 
     def obj_dump(self, counter):
         '''Dump bytecode'''
-        return f"{counter} " + self.__repr__()
+        return f"{counter} {self}"
 
     def __str__(self):
         '''Same as repr'''
@@ -197,7 +195,7 @@ class U32ProgL2(U32Helper):
             match = ETH_PROTOS[self.match_object]
 
         self.add_code([
-            U32Code(location=ETHER["proto"] + self.offset, size=2, lower=match, upper=match, mask=0xFFFF) 
+            U32Code(location=ETHER["proto"] + self.offset, size=2, lower=match, upper=match, mask=0xFFFF)
         ])
 
 class U32Prog8021Q(U32Helper):
@@ -209,9 +207,9 @@ class U32Prog8021Q(U32Helper):
         match = self.match_object
         self.add_code([
             U32Code(compiler_state.get_offset("L2") + 2 + self.offset,
-                    size=2, lower=match, upper=match, mask=0xFFF) 
+                    size=2, lower=match, upper=match, mask=0xFFF)
         ])
-    
+
     def compile_offsets(self, compiler_state=None):
         '''802.1q offset'''
         return compiler_state.get_offset(["L2", "L2T"])
@@ -231,9 +229,9 @@ class U32ProgL3(U32Helper):
         match = self.match_object
         self.add_code([
             U32Code(location=compiler_state.get_offset(["L2", "L2T"]) + IP["proto"] + self.offset,
-                    size=1, lower=match, upper=match, mask=0xFF) 
+                    size=1, lower=match, upper=match, mask=0xFF)
         ])
-            
+
 class U32ProgIP(U32Helper):
     '''Basic match on IP - any shape or form,
        added before matching on address, proto, etc.
@@ -248,7 +246,7 @@ class U32ProgIP(U32Helper):
         ip_version = self.pcap_obj.ip_version
         self.add_code([
             U32Code(location=compiler_state.get_offset(["L2", "L2T"]) +  self.offset,
-                    size=1, lower=ip_version, upper=ip_version, mask=0xFF, shift=4) 
+                    size=1, lower=ip_version, upper=ip_version, mask=0xFF, shift=4)
         ])
 
 
@@ -260,7 +258,7 @@ class U32ProgIP(U32Helper):
         if int(self.ip_version) == 4:
             self.add_code([
                 U32Code(location=compiler_state.get_offset(["L2", "L2T", "L3"]) + self.offset,
-                        size=1, mask=0xF, shift=-4, op="@") 
+                        size=1, mask=0xF, shift=-4, op="@")
             ])
         else:
             compiler_state.set_offset("L3", 40)
@@ -276,7 +274,7 @@ class U32ProgTCP(U32ProgL3):
 
         self.add_code([
                 U32Code(location=compiler_state.get_offset(["L2", "L2T"]) + 12 + self.offset,
-                        size=1, mask=0xF0, shift=0, next_op="@") 
+                        size=1, mask=0xF0, shift=0, op="@")
             ])
 
 class U32ProgPortRange(U32Helper):
@@ -308,22 +306,23 @@ class U32ProgPortRange(U32Helper):
 
         self.add_code([
                 U32Code(location=compiler_state.get_offset(["L2", "L2T", "L3"]) + self.offset,
-                        size=1, mask=0x3FC, shift=-2, op="@") 
+                        size=1, mask=0x3FC, shift=-2, op="@")
         ])
         if "src" in self.pcap_obj.quals:
             self.add_code([
                 U32Code(location=compiler_state.get_offset(["L2", "L2T", "L3"]) + self.offset,
-                        size=2, mask=0xFFFF, shift=0, lower=left.result, upper=right.result) 
+                        size=2, mask=0xFFFF, shift=0, lower=left.result, upper=right.result)
             ])
             if "dst" in self.pcap_obj.quals:
                 self.add_code([U32AND()])
-            
+
         if "dst" in self.pcap_obj.quals:
             self.add_code([
                 U32Code(location=compiler_state.get_offset(["L3", "L2T", "L3"]) + self.offset + 2,
-                        size=2, mask=0xFFFF, shift=0, lower=left.result, upper=right.result) 
+                        size=2, mask=0xFFFF, shift=0, lower=left.result, upper=right.result)
             ])
-class U32ProgPort(U32ProgPortRange):pass
+class U32ProgPort(U32ProgPortRange):
+    '''Port (maps to Port Range)'''
 
 class U32ProgIPv4(U32Helper):
     '''Basic match on v4 address or network.
@@ -368,7 +367,7 @@ class U32ProgIPv4(U32Helper):
             value = int(addr)
 
         self.add_code([
-                U32Code(location=location, size=4, mask=mask, lower=value, upper=value, shift=0) 
+                U32Code(location=location, size=4, mask=mask, lower=value, upper=value, shift=0)
             ])
 
 class U32ProgIPv6(U32Helper):
@@ -412,12 +411,12 @@ class U32ProgIPv6(U32Helper):
             address = int(addr).to_bytes(16)
             netmask = bytes([0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
                             0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
-                            0xff, 0xff]) 
+                            0xff, 0xff])
         for nibble in range(0,4):
             value = int.from_bytes(address[nibble*4:nibble*4 + 4])
             mask = int.from_bytes(netmask[nibble*4:nibble*4 + 4])
             code.extend([
-                U32Code(location=location + nibble*4, size=4, mask=mask, lower=value, upper=value, shift=0) 
+                U32Code(location=location + nibble*4, size=4, mask=mask, lower=value, upper=value, shift=0)
             ])
             if nibble < 3:
                 code.extend(U32AND())
@@ -470,17 +469,8 @@ class U32ProgOffset(U32Helper):
         super().compile(compiler_state)
 
         self.pcap_obj.compile_offsets(compiler_state)
-        self.add_code(code)
+        self.add_code(self.pcap_obj.get_code(self.helper_id))
 
-
-##COMP_TABLE = {
-#    "<" : JLT,
-#    ">" : JGT,
-#    "==" : JEQ,
-#    "!=" : JNEQ,
-#    ">=" : JGE,
-#    "<=" : JLE
-#}
 
 
 class U32ProgLoad(U32Helper):
@@ -489,18 +479,7 @@ class U32ProgLoad(U32Helper):
     def compile(self, compiler_state=None):
         '''Compile arithmetics'''
 
-        raise ValueError("Not yet implemented")
-
-        super().compile(compiler_state)
-        super().compile_offsets(compiler_state)
-
-        if isinstance(self.pcap_obj.attribs["loc"], Immediate):
-            if self.pcap_obj.use_offset:
-                self.add_code([LD([self.pcap_obj.attribs["loc"].attribs["match_object"] + compiler_state.offset], size=self.pcap_obj.attribs["size"], mode=2)])
-            else:
-                self.add_code([LD([self.pcap_obj.attribs["loc"].attribs["match_object"] + compiler_state.offset], size=self.pcap_obj.attribs["size"], mode=1)])
-        self.pcap_obj.get_code(self.helper_id)[0].add_label("__start__{}".format(self.frags[0].loc))
-        self.pcap_obj.get_code(self.helper_id)[-1].add_label("__end__{}".format(self.frags[-1].loc))
+        raise ValueError("Load from payload offset is not yet implemented")
 
 class U32ProgIndexLoad(U32Helper):
     '''Perform arithmetic operations.
@@ -510,10 +489,6 @@ class U32ProgIndexLoad(U32Helper):
         '''Compile arithmetics'''
         super().compile(compiler_state)
         raise ValueError("Not yet implemented")
-        self.add_code([
-            TAX(),
-            LD([0], size=self.pcap_obj.attribs["size"], mode=2)
-        ])
 
 
 COMPUTE_TABLE = {
@@ -548,62 +523,23 @@ class U32ProgComp(U32Helper):
     def compile(self, compiler_state=None):
         '''Compile comparison between operands'''
 
-        raise ValueError("Not yet implemented")
         left = self.pcap_obj.left
         right = self.pcap_obj.right
-        stashed_in = None
 
         super().compile(compiler_state)
 
-        if left.result is None:
-            stashed_in = compiler_state.next_free_reg()
-            left.add_code([ST([self.stashed_in], mode=3)], self.helper_id)
 
-        if left.result is None and right.result is None:
-            self.add_code([
-                LDX([self.left.stashed_in], mode=3),
-                COMP_TABLE[self.attribs["op"]]([self.stashed_in, self.on_success, self.on_failure], mode=3)
-            ])
+        if left.result is None or right.result is None:
+            raise ValueError("Only static expressions are allowed")
 
-        if left.result is not None and right.result is None:
-            self.add_code([COMP_TABLE[self.attribs["op"]]([left.result, self.on_success, self.on_failure], mode=7)])
 
-        if left.result is None and right.result is not None:
-            if stashed_in is not None:
-                left.code[self.helper_id].pop()
-            self.add_code([COMP_TABLE[self.attribs["op"]]([right.result, self.on_success, self.on_failure], mode=7)])
-
-        if left.result is not None and right.result is not None:
-            self.pcap_obj.result = compute(left.result, self.attribs["op"], right.result)
-            if self.pcap_obj.result:
-                self.add_code(JMP([self.on_success]))
-            else:
-                self.add_code(JMP([self.on_failure]))
-
-        if stashed_in is not None:
-            compiler_state.release(stashed_in)
-        self.pcap_obj.get_code(self.helper_id)[0].add_label("__start__{}".format(self.frags[0].loc))
-        self.pcap_obj.get_code(self.helper_id)[-1].add_label("__end__{}".format(self.frags[-1].loc))
+        self.pcap_obj.result = compute(left.result, self.attribs["op"], right.result)
 
 class U32Immediate(U32Helper):
     '''Fake leafe for immediate ops
     '''
     def compile(self, compiler_state=None):
         self.pcap_obj.result = self.match_object
-
-
-#ARITH_TABLE = {
-#    "+" : ADD,
-#    "-" : SUB,
-#    "*" : MUL,
-#    "/" : DIV,
-#    "%" : MOD,
-#    "&" : AND,
-#    "|" : OR,
-#    "^" : XOR,
-#    "<<" : LSH,
-#    ">>" : RSH
-#}
 
 class U32ProgArOp(U32Helper):
     '''Perform arithmetic operations.
@@ -612,38 +548,13 @@ class U32ProgArOp(U32Helper):
     def compile(self, compiler_state=None):
         '''Compile arithmetics'''
 
-        raise ValueError("Not yet implemented")
         left = self.pcap_obj.left
         right = self.pcap_obj.right
-        stashed_in = None
 
         super().compile(compiler_state)
 
-        if left.result is None and right.result is None:
-            stashed_in = compiler_state.next_free_reg()
-            left.add_code([ST([self.stashed_in], mode=3)], self.helper_id)
-            self.add_code([
-                    LDX([stashed_in], mode=3),
-                    ARITH_TABLE[self.attribs["op"]](mode=0)
-                ])
-
-        if left.result is not None and right.result is None:
-            self.add_code([ARITH_TABLE[self.attribs["op"]]([left.result], mode=4)])
-
-        if left.result is None and right.result is not None:
-            if stashed_in is not None:
-                left.code[self.helper_id].pop()
-            self.add_code([ARITH_TABLE[self.attribs["op"]]([right.result], mode=4)])
-
         if self.left.result is not None and self.right.result is not None:
-            if stashed_in is not None:
-                left.code[self.helper_id].pop()
             self.pcap_obj.result = compute(left.result, self.attribs["op"], right.result)
-
-        if stashed_in is not None:
-            compiler_state.release(stashed_in)
-        self.pcap_obj.get_code(self.helper_id)[0].add_label("__start__{}".format(self.frags[0].loc))
-        self.pcap_obj.get_code(self.helper_id)[-1].add_label("__end__{}".format(self.frags[-1].loc))
 
 def dispatcher(obj):
     '''Return the correct code helper'''
