@@ -63,9 +63,11 @@ class U32Code(AbstractCode):
         if self.shift < 0:
             mask = (mask << abs(self.shift)) & self.mask
             ret += " << " + str(abs(shift))
-        if self.shift > 0:
+        elif self.shift > 0:
             mask = (mask >> self.shift) & self.mask
             ret += " >> " + str(shift)
+        else:
+            mask = self.mask
         if self.next_op is None:
             return ret + f" 0x{mask:04x} = {value}"
 
