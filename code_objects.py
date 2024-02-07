@@ -367,6 +367,17 @@ class AbstractProgram():
 
         self.compiled = True
 
+    def second_pass(self, branch_state):
+        '''Second pass'''
+        if not self.compiled:
+            raise ValueError("Invalid state - compile first")
+
+        for helper in self.helpers:
+            helper.second_pass(branch_state)
+
+        for frag in self.frags:
+            frag.second_pass(branch_state)
+
     def obj_dump(self, code_id):
         '''Dump "opcodes"'''
         if not self.compiled:
@@ -462,6 +473,9 @@ class AbstractHelper():
         '''compile all code for the same helper type'''
         self.compiled_offsets = True
         return 0
+
+    def second_pass(self, compiler_state=None):
+        '''Second compiler pass where needed. f.e u32'''
 
 class ProgSuccess(AbstractProgram):
     '''Basic match on IP - any shape or form,

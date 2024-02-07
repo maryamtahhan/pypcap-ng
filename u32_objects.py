@@ -26,22 +26,28 @@ IPV4_REGEXP = re.compile(r"(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})")
 
 SIZE_MODS = [None, "u8", "u16", None, "u32"]
 
+# U32 instruction as described in the literature is not an instruction
+# when using our abstractions. It is a mini-program which consists f
+# LD (absolute or index), SHL or SHR, AND and a comparison - a total
+# of four instructions
+
+LD_OP = 0
+SH_OP = 1
+AND_OP = 2
+COMP_OP = 3
 
 class U32Code(AbstractCode):
     '''U32 variant of code generation'''
-    def __init__(self, location=0, mask=0, size=4, lower=0, upper=0, shift=0, op=None):
+    def __init__(self, master=False):
         super().__init__()
-        self.location = location
-        self.size = size
-        self.mask = mask
-        self.lower = lower
-        self.upper = upper
-        self.shift = shift
-        self.next_op = op
+        self.master = master
+        self.comp = []
 
     def obj_dump(self, counter):
         '''Dump bytecode'''
-        return f"{counter} {self}\n"
+        if self.master:
+            return f"{counter} {self}\n"
+        return ""
 
     def __repr__(self):
         '''Same as repr'''
@@ -49,32 +55,69 @@ class U32Code(AbstractCode):
 
     def __str__(self):
         '''Printable form of U32 instructions'''
-        if self.lower == self.upper:
-            value = f"{self.lower:04x}"
-        else:
-            value = f"{self.lower:04x}:{self.upper:04x}"
+        return ""
 
-        ret = f"{self.location}"
+class U32LD(U32Code):
+    '''U32 variant of LD subinstruction'''
+    def __init__(self, location=0, size=4, index=False):
+        super().__init__(master=True)
+        self.location = location
+        self.size = size
+        self.index = index
+        self.comp.append(self)
 
-        shift = (32 - self.size * 8) + self.shift
+    def __str__(self):
+        '''Printable form of U32 instructions'''
+
+        ret = "{}".format(self.location)
+        shift = (32 - self.size * 8) + self.comp[SH_OP].shift
         mask = ((1 << (self.size * 8)) - 1)
 
-
-        if self.shift < 0:
-            mask = (mask << abs(self.shift)) & self.mask
+        if self.comp[SH_OP].shift < 0:
+            mask = (mask << abs(self.comp[SH_OP].shift)) & self.comp[AND_OP].mask
             ret += " << " + str(abs(shift))
-        elif self.shift > 0:
-            mask = (mask >> self.shift) & self.mask
+        elif self.comp[SH_OP].shift > 0:
+            mask = (mask >> self.comp[SH_OP].shift) & self.comp[AND_OP].mask
             ret += " >> " + str(shift)
         else:
-            mask = self.mask
-        if self.next_op is None:
+            mask = self.comp[AND_OP].mask
+
+        try:
+            if self.comp[COMP_OP].lower == self.comp[COMP_OP].upper:
+                value = "{:04x}".format(self.comp[COMP_OP].lower)
+            else:
+                value = "{:04x}:{:04x}".format(self.comp[COMP_OP].lower,self.comp[COMP_OP].upper)
+
             return ret + f" 0x{mask:04x} = {value}"
+        except IndexError:
+            pass
 
-        return ret + f" 0x{mask:04x} {self.next_op}"
+        # no check - just offset (it is really a check 0-0xFFFF)
+
+        return ret + f" 0x{mask:04x} @"
 
 
-class U32AND(AbstractCode):
+
+class U32SH(U32Code):
+    '''U32 variant of SHL/SHR. SHL is represented using negative values'''
+    def __init__(self, shift=0):
+        super().__init__()
+        self.shift = shift
+
+class U32AND(U32Code):
+    '''U32 variant of code generation'''
+    def __init__(self, mask=0xFFFFFFFF):
+        super().__init__()
+        self.mask = mask
+
+class U32Compare(U32Code):
+    '''U32 variant of code generation'''
+    def __init__(self, lower=0, upper=0xFFFFFFFF):
+        super().__init__()
+        self.lower = lower
+        self.upper = upper
+
+class U32LogicalAND(AbstractCode):
     '''U32 variant of code generation'''
     def __init__(self):
         super().__init__()
@@ -157,10 +200,22 @@ class U32Helper(AbstractHelper):
 
     def add_code(self, code):
         '''Invoke pcap obj add_code'''
-        so_far = self.pcap_obj.get_code(self.helper_id)
-        if len(so_far) > 0 and isinstance(so_far[-1], U32Code)\
-            and isinstance(code[0], U32Code) and so_far[-1].next_op is None:
-            self.pcap_obj.add_code([U32AND()], self.helper_id)
+        last_ld = None
+        for insn in code:
+            if isinstance(insn, U32LD):
+                last_ld = insn
+            elif isinstance(insn, U32LogicalAND):
+                pass
+            else:
+                if last_ld is not None:
+                    last_ld.comp.append(insn)
+        try:
+            if isinstance(self.pcap_obj.get_code(self.helper_id)[-1], U32Compare) and \
+                isinstance(code[0], U32LD):
+                self.pcap_obj.add_code([U32LogicalAND()], self.helper_id)
+        except IndexError:
+            pass
+            
         self.pcap_obj.add_code(code, self.helper_id)
 
     def add_offset_code(self, code):
@@ -197,7 +252,10 @@ class U32ProgL2(U32Helper):
             match = ETH_PROTOS[self.match_object]
 
         self.add_code([
-            U32Code(location=ETHER["proto"] + self.offset, size=2, lower=match, upper=match, mask=0xFFFF)
+            U32LD(location=ETHER["proto"] + self.offset, size=2),
+            U32SH(),
+            U32AND(mask=0xFFFF),
+            U32Compare(lower=match, upper=match)
         ])
 
 class U32Prog8021Q(U32Helper):
@@ -208,8 +266,10 @@ class U32Prog8021Q(U32Helper):
         compiler_state.add_offset("L2T", 4)
         match = self.match_object
         self.add_code([
-            U32Code(compiler_state.get_offset("L2") + 2 + self.offset,
-                    size=2, lower=match, upper=match, mask=0xFFF)
+            U32LD(compiler_state.get_offset("L2") + 2 + self.offset, size=2),
+            U32SH(),
+            U32AND(mask=0xFFF),
+            U32Compare(lower=match, upper=match)
         ])
 
     def compile_offsets(self, compiler_state=None):
@@ -230,8 +290,10 @@ class U32ProgL3(U32Helper):
         super().compile(compiler_state)
         match = self.match_object
         self.add_code([
-            U32Code(location=compiler_state.get_offset(["L2", "L2T"]) + IP["proto"] + self.offset,
-                    size=1, lower=match, upper=match, mask=0xFF)
+            U32LD(compiler_state.get_offset(["L2", "L2T"]) + IP["proto"] + self.offset, size=1),
+            U32SH(),
+            U32AND(mask=0xFF),
+            U32Compare(lower=match, upper=match)
         ])
 
 class U32ProgIP(U32Helper):
@@ -247,10 +309,11 @@ class U32ProgIP(U32Helper):
 
         ip_version = self.pcap_obj.ip_version
         self.add_code([
-            U32Code(location=compiler_state.get_offset(["L2", "L2T"]) +  self.offset,
-                    size=1, lower=ip_version, upper=ip_version, mask=0xFF, shift=4)
+            U32LD(compiler_state.get_offset(["L2", "L2T"]) + self.offset, size=1),
+            U32SH(shift=4),
+            U32AND(mask=0xFF),
+            U32Compare(lower=ip_version, upper=ip_version)
         ])
-
 
     def compile_offsets(self, compiler_state=None):
         '''Compile offset past IP Headers'''
@@ -259,8 +322,10 @@ class U32ProgIP(U32Helper):
 
         if int(self.ip_version) == 4:
             self.add_code([
-                U32Code(location=compiler_state.get_offset(["L2", "L2T", "L3"]) + self.offset,
-                        size=1, mask=0xF, shift=-4, op="@")
+                U32LD(compiler_state.get_offset(["L2", "L2T", "L3"]) + self.offset, size=1),
+                U32SH(shift=-4),
+                U32AND(mask=0xF),
+                # no compare!!!
             ])
         else:
             compiler_state.set_offset("L3", 40)
@@ -275,9 +340,11 @@ class U32ProgTCP(U32ProgL3):
         super().compile_offsets(compiler_state)
 
         self.add_code([
-                U32Code(location=compiler_state.get_offset(["L2", "L2T"]) + 12 + self.offset,
-                        size=1, mask=0xF0, shift=0, op="@")
-            ])
+            U32LD(compiler_state.get_offset(["L2", "L2T"]) + 12 + self.offset, size=1),
+            U32SH(shift=0),
+            U32AND(mask=0xF0),
+            # no compare!!!
+        ])
 
 class U32ProgPortRange(U32Helper):
     '''Basic match on IP - any shape or form,
@@ -305,24 +372,31 @@ class U32ProgPortRange(U32Helper):
         self.compile_offsets(compiler_state)
 
         # this should really come from compile_offsets
-
         self.add_code([
-                U32Code(location=compiler_state.get_offset(["L2", "L2T", "L3"]) + self.offset,
-                        size=1, mask=0x3FC, shift=-2, op="@")
+            U32LD(compiler_state.get_offset(["L2", "L2T", "L3"]) + self.offset, size=1),
+            U32SH(shift=-2),
+            U32AND(mask=0x3FC),
+            # no compare!!!
         ])
+
         if "src" in self.pcap_obj.quals:
             self.add_code([
-                U32Code(location=compiler_state.get_offset(["L2", "L2T", "L3"]) + self.offset,
-                        size=2, mask=0xFFFF, shift=0, lower=left.result, upper=right.result)
+                U32LD(size=2),
+                U32SH(shift=0),
+                U32AND(mask=0xFFFF),
+                U32Compare(lower=left.result, upper=right.result)
             ])
             if "dst" in self.pcap_obj.quals:
                 self.add_code([U32AND()])
 
         if "dst" in self.pcap_obj.quals:
             self.add_code([
-                U32Code(location=compiler_state.get_offset(["L3", "L2T", "L3"]) + self.offset + 2,
-                        size=2, mask=0xFFFF, shift=0, lower=left.result, upper=right.result)
+                U32LD(location=2, size=2),
+                U32SH(shift=0),
+                U32AND(mask=0xFFFF),
+                U32Compare(lower=left.result, upper=right.result)
             ])
+
 class U32ProgPort(U32ProgPortRange):
     '''Port (maps to Port Range)'''
 
@@ -369,8 +443,11 @@ class U32ProgIPv4(U32Helper):
             value = int(addr)
 
         self.add_code([
-                U32Code(location=location, size=4, mask=mask, lower=value, upper=value, shift=0)
-            ])
+            U32LD(location=location, size=4),
+            U32SH(shift=0),
+            U32AND(mask=mask),
+            U32Compare(lower=value, upper=value)
+        ])
 
 class U32ProgIPv6(U32Helper):
     '''Basic match on v4 address or network.
@@ -417,11 +494,14 @@ class U32ProgIPv6(U32Helper):
         for nibble in range(0,4):
             value = int.from_bytes(address[nibble*4:nibble*4 + 4])
             mask = int.from_bytes(netmask[nibble*4:nibble*4 + 4])
-            code.extend([
-                U32Code(location=location + nibble*4, size=4, mask=mask, lower=value, upper=value, shift=0)
+            self.add_code([
+                U32LD(location=location + nibble * 4, size=4),
+                U32SH(shift=0),
+                U32AND(mask=mask),
+                U32Compare(lower=value, upper=value)
             ])
             if nibble < 3:
-                code.extend(U32AND())
+                code.extend(U32LogicalAND())
         self.add_code(code)
 
 
@@ -547,7 +627,7 @@ class U32ProgComp(U32Helper):
 
         if self.pcap_obj.result is not None:
             self.add_code([
-                    U32Code(location=left.result, size=4, mask=0xFFFF, lower=right.result, upper=right.result, shift=0)
+                    #U32Code(location=left.result, size=4, mask=0xFFFF, lower=right.result, upper=right.result, shift=0)
                 ])
 
 
