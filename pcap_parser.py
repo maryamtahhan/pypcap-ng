@@ -17,7 +17,7 @@ import ply.yacc as yacc
 from lexer_defs import tokens
 import lexer_defs
 import code_objects
-from header_constants import ETH_PROTOS, IP_PROTOS
+from header_constants import ETH_PROTOS, IP_PROTOS, LOC_CONSTANTS
 
 precedence = (
     ('left', 'OR', 'AND'),
@@ -260,11 +260,15 @@ def p_pload(p):
 
 def p_peek(p):
     '''peek    : LBRA arth ':' NUM RBRA
+               | LBRA STRING_LITERAL RBRA
                | peekw 
                | peek_comp
     '''
     if len(p) == 6:
         p[0] = code_objects.ProgLoad(loc=p[2], size=p[4])
+    elif len (p) > 2:
+        (loc, size) = LOC_CONSTANTS[p[2]]
+        p[0] = code_objects.ProgLoad(loc=loc, size=size)
     else:
         p[0] = p[1]
 

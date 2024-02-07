@@ -12,7 +12,7 @@ import sys
 import re
 import ipaddress
 from header_constants import ETHER, IP, IP6, ETH_PROTOS
-from code_objects import AbstractCode, AbstractHelper
+from code_objects import AbstractCode, AbstractHelper, ProgLoad
 
 
 # Some of the names are predefined. They are instruction names. We
@@ -481,7 +481,9 @@ class U32ProgLoad(U32Helper):
     def compile(self, compiler_state=None):
         '''Compile arithmetics'''
 
-        raise ValueError("Load from payload offset is not yet implemented")
+        super().compile(compiler_state)
+        self.pcap_obj.compile_offsets(compiler_state)
+        self.pcap_obj.result = self.pcap_obj.frags[0].result
 
 class U32ProgIndexLoad(U32Helper):
     '''Perform arithmetic operations.
@@ -490,7 +492,9 @@ class U32ProgIndexLoad(U32Helper):
     def compile(self, compiler_state=None):
         '''Compile arithmetics'''
         super().compile(compiler_state)
-        raise ValueError("Not yet implemented")
+        self.pcap_obj.compile_offsets(compiler_state)
+        #self.add_code(self.pcap_obj.get_code(self.helper_id))
+
 
 
 COMPUTE_TABLE = {
@@ -530,12 +534,22 @@ class U32ProgComp(U32Helper):
 
         super().compile(compiler_state)
 
+        if isinstance(left, ProgLoad):
+            if left.result is None:
+                print(left.attribs)
+                raise ValueError("Only static expressions are allowed")
 
-        if left.result is None or right.result is None:
+        if right.result is None:
             raise ValueError("Only static expressions are allowed")
 
 
         self.pcap_obj.result = compute(left.result, self.attribs["op"], right.result)
+
+        if self.pcap_obj.result is not None:
+            self.add_code([
+                    U32Code(location=left.result, size=4, mask=0xFFFF, lower=right.result, upper=right.result, shift=0)
+                ])
+
 
 class U32Immediate(U32Helper):
     '''Fake leafe for immediate ops

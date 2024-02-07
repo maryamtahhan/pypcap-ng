@@ -152,3 +152,26 @@ IP_PROTOS= {
     # internally by the Linux kernel.
     "mptcp":        262,	# Multipath TCP connection
 }
+
+LOC_CONSTANTS = {
+    "icmptype":(1,1),
+    "icmpcode":(2,1),
+    "icmp6type":(1,1),
+    "icmp6code":(2,1),
+}
+
+MISC_CONSTANTS = {
+    "echoreply": 0,
+    "destunreach": 3,
+    "redirect":5,
+    "echo":8,
+    "ra":9,
+    "rs":10,
+    "timeexceeded":11,
+    "parameterproblem":12,
+    "timestamp":13,
+    "timestampreply":14,
+    "photuris":40,
+    "eechorequest":42,
+    "eechoreply":43
+}
