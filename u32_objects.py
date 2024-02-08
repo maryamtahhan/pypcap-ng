@@ -527,7 +527,7 @@ class U32ProgAND(U32Helper):
         '''Compile AND'''
 
         self.left.compile(compiler_state)
-        self.left.add_code([U32AND()], self.helper_id)
+        self.left.add_code([U32LogicalAND()], self.helper_id)
         self.right.compile(compiler_state)
 
 #COMP_TABLE = {
