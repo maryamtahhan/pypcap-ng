@@ -12,7 +12,7 @@ import sys
 import re
 import ipaddress
 from header_constants import ETHER, IP, IP6, ETH_PROTOS
-from code_objects import AbstractCode, AbstractHelper, ProgLoad
+from code_objects import AbstractCode, AbstractHelper
 
 
 # Some of the names are predefined. They are instruction names. We
@@ -75,12 +75,15 @@ class U32LD(U32Code):
 
         if self.comp[SH_OP].shift < 0:
             mask = (mask << abs(self.comp[SH_OP].shift)) & self.comp[AND_OP].mask
-            ret += " << " + str(abs(shift))
         elif self.comp[SH_OP].shift > 0:
             mask = (mask >> self.comp[SH_OP].shift) & self.comp[AND_OP].mask
-            ret += " >> " + str(shift)
         else:
             mask = self.comp[AND_OP].mask
+
+        if shift < 0:
+            ret += " << " + str(abs(shift))
+        elif shift > 0:
+            ret += " >> " + str(shift)
 
         try:
             if self.comp[COMP_OP].lower == self.comp[COMP_OP].upper:
@@ -91,6 +94,11 @@ class U32LD(U32Code):
             return ret + f" 0x{mask:04x} = {value}"
         except IndexError:
             pass
+        except AttributeError:
+            classes = []
+            for op in self.comp:
+                classes.append(op.__class__.__name__)
+            return f"Off by one {classes}"
 
         # no check - just offset (it is really a check 0-0xFFFF)
 
@@ -200,14 +208,21 @@ class U32Helper(AbstractHelper):
 
     def add_code(self, code):
         '''Invoke pcap obj add_code'''
+
+        if len(code) == 0:
+            return
+
+
         last_ld = None
+        to_add = True
         for insn in code:
             if isinstance(insn, U32LD):
                 last_ld = insn
+                to_add = len(last_ld.comp) == 1
             elif isinstance(insn, U32LogicalAND):
                 pass
             else:
-                if last_ld is not None:
+                if last_ld is not None and to_add:
                     last_ld.comp.append(insn)
         try:
             if isinstance(self.pcap_obj.get_code(self.helper_id)[-1], U32Compare) and \
@@ -215,12 +230,25 @@ class U32Helper(AbstractHelper):
                 self.pcap_obj.add_code([U32LogicalAND()], self.helper_id)
         except IndexError:
             pass
-            
+
         self.pcap_obj.add_code(code, self.helper_id)
 
     def add_offset_code(self, code):
         '''Invoke pcap obj add_code'''
+        if len(code) == 0:
+            return
+
+        last_ld = None
+        for insn in code:
+            if isinstance(insn, U32LD):
+                last_ld = insn
+            elif isinstance(insn, (U32LogicalAND, U32Compare)):
+                raise ValueError()
+            else:
+                if last_ld is not None:
+                    last_ld.comp.append(insn)
         self.pcap_obj.add_offset_code(code, self.helper_id)
+
 
 # These are way too cU32 specific to try to make them into generic instances
 
@@ -321,10 +349,10 @@ class U32ProgIP(U32Helper):
         super().compile_offsets(compiler_state)
 
         if int(self.ip_version) == 4:
-            self.add_code([
+            self.add_offset_code([
                 U32LD(compiler_state.get_offset(["L2", "L2T", "L3"]) + self.offset, size=1),
-                U32SH(shift=-4),
-                U32AND(mask=0xF),
+                U32SH(shift=-2),
+                U32AND(mask=0x3C),
                 # no compare!!!
             ])
         else:
@@ -339,7 +367,7 @@ class U32ProgTCP(U32ProgL3):
         '''Compile offset past IP Headers'''
         super().compile_offsets(compiler_state)
 
-        self.add_code([
+        self.add_offset_code([
             U32LD(compiler_state.get_offset(["L2", "L2T"]) + 12 + self.offset, size=1),
             U32SH(shift=0),
             U32AND(mask=0xF0),
@@ -549,11 +577,7 @@ class U32ProgOffset(U32Helper):
         '''
 
         super().compile(compiler_state)
-
         self.pcap_obj.compile_offsets(compiler_state)
-        self.add_code(self.pcap_obj.get_code(self.helper_id))
-
-
 
 class U32ProgLoad(U32Helper):
     '''Load a value from packet address
@@ -563,7 +587,6 @@ class U32ProgLoad(U32Helper):
 
         super().compile(compiler_state)
         self.pcap_obj.compile_offsets(compiler_state)
-        self.pcap_obj.result = self.pcap_obj.frags[0].result
 
 class U32ProgIndexLoad(U32Helper):
     '''Perform arithmetic operations.
@@ -573,9 +596,6 @@ class U32ProgIndexLoad(U32Helper):
         '''Compile arithmetics'''
         super().compile(compiler_state)
         self.pcap_obj.compile_offsets(compiler_state)
-        #self.add_code(self.pcap_obj.get_code(self.helper_id))
-
-
 
 COMPUTE_TABLE = {
     "+" : lambda x, y: x + y,
@@ -613,22 +633,22 @@ class U32ProgComp(U32Helper):
         right = self.pcap_obj.right
 
         super().compile(compiler_state)
+        super().compile_offsets(compiler_state)
+        self.add_code(self.pcap_obj.get_offset_code(self.helper_id))
 
-        if isinstance(left, ProgLoad):
-            if left.result is None:
-                print(left.attribs)
-                raise ValueError("Only static expressions are allowed")
+        if left.result is not None and right.result is not None:
+            self.pcap_obj.result = compute(left.result, self.attribs["op"], right.result)
+            return
 
         if right.result is None:
-            raise ValueError("Only static expressions are allowed")
+            raise ValueError("Only static expressions are allowed for values")
 
-
-        self.pcap_obj.result = compute(left.result, self.attribs["op"], right.result)
-
-        if self.pcap_obj.result is not None:
-            self.add_code([
-                    #U32Code(location=left.result, size=4, mask=0xFFFF, lower=right.result, upper=right.result, shift=0)
-                ])
+        self.add_code([
+            U32LD(location=0),
+            U32SH(shift=0),
+            U32AND(mask=0xFFFFFFFF),
+            U32Compare(lower=right.result, upper=right.result)
+        ])
 
 
 class U32Immediate(U32Helper):
