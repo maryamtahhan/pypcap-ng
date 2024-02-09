@@ -78,7 +78,7 @@ class U32LD(U32Code):
         elif self.comp[SH_OP].shift > 0:
             mask = (mask >> self.comp[SH_OP].shift) & self.comp[AND_OP].mask
         else:
-            mask = self.comp[AND_OP].mask
+            mask = self.comp[AND_OP].mask & mask
 
         if shift < 0:
             ret += " << " + str(abs(shift))
@@ -643,10 +643,16 @@ class U32ProgComp(U32Helper):
         if right.result is None:
             raise ValueError("Only static expressions are allowed for values")
 
+        try:
+            location = left.attribs["loc"].attribs["match_object"]
+            size = left.attribs["size"]
+        except KeyError:
+            size = 4
+
         self.add_code([
-            U32LD(location=0),
+            U32LD(location=location, size=size),
             U32SH(shift=0),
-            U32AND(mask=0xFFFFFFFF),
+            U32AND(),
             U32Compare(lower=right.result, upper=right.result)
         ])
 
