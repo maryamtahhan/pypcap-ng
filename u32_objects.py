@@ -642,9 +642,12 @@ class U32ProgComp(U32Helper):
 
         if right.result is None:
             raise ValueError("Only static expressions are allowed for values")
-
         try:
             location = left.attribs["loc"].attribs["match_object"]
+        except AttributeError:
+            location = int(left.attribs["loc"])
+
+        try:
             size = left.attribs["size"]
         except KeyError:
             size = 4
