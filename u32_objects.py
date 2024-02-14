@@ -146,10 +146,25 @@ V4_NET_REGEXP = re.compile(r"(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\/(\d{1,2})")
 
 class U32Helper(AbstractHelper):
     '''U32 variant of AbstractHelper'''
+
     def __init__(self, pcap_obj):
         super().__init__(pcap_obj)
         self.helper_id = "u32"
         self.stashed_in = None
+
+    def dump_code(self, fmt, options):
+        '''Dump BPF'''
+
+        super().dump_code(fmt, options)
+
+        res = ""
+        for insn in self.get_code():
+            res +=(f"{insn} ")
+
+        res += "\n"
+
+        return res
+
 
     @property
     def offset(self):

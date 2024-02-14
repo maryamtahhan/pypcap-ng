@@ -303,6 +303,7 @@ class Jump(CBPFCode):
 
     def resolve_refs(self, old_label, new_label):
         '''Update refs'''
+        #pylint: disable=consider-using-enumerate
         for index in range(0, len(self.values)):
             if self.values[index] == old_label:
                 self.values[index] = new_label
@@ -493,6 +494,31 @@ class CBPFHelper(AbstractHelper):
             return self.attribs["offset"]
         except KeyError:
             return 0
+
+    def dump_code(self, fmt, options):
+        '''Dump BPF'''
+
+        super().dump_code(fmt, options)
+
+        res = ""
+        if fmt == "asm":
+            linenum = 0
+            for ins in self.get_code():
+                if "lines" in options:
+                    linenum += 1
+                    res += f"{linenum} {ins}\n"
+                else:
+                    res += f"{ins}\n"
+
+        if fmt == "iptables":
+            res += "{}".format(len(self.get_code()))
+            counter = 0
+            for ins in self.get_code():
+                res += ", {} {} {} {}".format(*ins.obj_dump(counter))
+                counter += 1
+            res += "\n"
+        return res
+
 
 
     @property

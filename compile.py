@@ -75,45 +75,21 @@ def main():
 
     parsed.compile(bpf_objects.CBPFCompilerState()) # FIXME - make generic
 
-    if args["debug"] > 0:
-        for generator in generators:
-            counter = 0
-            for inst in parsed.get_code(generator):
-                sys.stderr.write(f"{counter} {inst}\n")
-                counter += 1
-
-    parsed.resolve_refs()
-
     try:
         out = open(args["output"],"+w",encoding="ascii")
     except (KeyError, TypeError):
         out = sys.stdout
 
-    if args["format"] == "asm":
-        for generator in generators:
-            counter = 0
-            for inst in parsed.get_code(generator):
-                out.write(f"{counter} {inst}\n")
-                counter += 1
-    elif args["format"] == "iptables":
-        for generator in generators:
-            if generator == "cbpf":
-                try:
-                    code = parsed.get_code(generator)
-                    out.write("{}".format(len(code)))
-                    counter = 0
-                    for insn in code:
-                        out.write(", {} {} {} {}".format(*insn.obj_dump(counter)))
-                        counter += 1
-                    out.write("\n")
-                except KeyError:
-                    pass
-            elif generator == "u32":
-                for insn in parsed.get_code(generator):
-                    out.write(f"{insn} ")
-                out.write("\n")
-    else:
-        sys.stderr.write("This output is not yet supported\n")
+
+    if args["debug"] > 0:
+        for helper in parsed.helpers:
+            out.write(helper.dump_code(args["format"],["lines"]))
+
+    
+    parsed.resolve_refs()
+
+    for helper in parsed.helpers:
+        out.write(helper.dump_code(args["format"],["lines"]))
 
     if out != sys.stdout:
         out.close()
