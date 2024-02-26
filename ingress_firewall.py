@@ -4,6 +4,8 @@
 
 import sys
 import json
+from argparse import ArgumentParser
+import subprocess
 import code_objects
 import bpf_objects
 import u32_objects
@@ -59,6 +61,58 @@ def process_proto(proto, p_cfg, cidr):
     #pylint: disable=consider-using-f-string
     return "src {} and {} dst {}".format(cidr, proto, pcap_expr[0])
 
+def form_args(interface, rule, mode, options):
+    '''Form iptables arguments'''
+
+    res = ""
+
+    u32_ok = False
+    if mode in ["u32", "auto"]:
+        try:
+            code = rule.dump_code("u32", "iptables", options)
+            if len(code) > 0:
+                res = f"/sbin/iptables -A INPUT -j {rule.action} -i {interface} --u32 {code}"
+                u32_ok = True
+        except KeyError:
+            pass
+
+    if not u32_ok and mode in ["cbpf", "auto"]:
+        try:
+            code = rule.dump_code("cbpf", "iptables", options)
+            if len(code) > 0:
+                res = f"/sbin/iptables -A INPUT -j {rule.action} -i {interface} --bpf {code}"
+        except KeyError:
+            pass
+
+    return res
+
+def dry_run_u32_apply_fn(interface, rule, options):
+    '''Dry run function - print the rules which will be applied'''
+    print(form_args(interface, rule, "u32", options))
+    return True
+
+def dry_run_cbpf_apply_fn(interface, rule, options):
+    '''Dry run function - print the rules which will be applied'''
+    print(form_args(interface, rule, "cbpf", options))
+    return True
+
+def iptables_u32_apply_fn(interface, rule, options):
+    '''Apply via iptables'''
+    # for now - dummy, same as dry_run
+    try:
+        subprocess.run(form_args(interface, rule, "u32", options), shell=True, check=True)
+        return True
+    except subprocess.CalledProcessError:
+        return False
+
+def iptables_cbpf_apply_fn(interface, rule, options):
+    '''Apply via iptables'''
+    # for now - dummy, same as dry_run
+    try:
+        subprocess.run(form_args(interface, rule, "cbpf", options), shell=True, check=True)
+        return True
+    except subprocess.CalledProcessError:
+        return False
 
 
 PROTO_MAP = {
@@ -66,6 +120,13 @@ PROTO_MAP = {
     "TCP":lambda p_cfg, cidr : process_proto("tcp", p_cfg, cidr),
     "UDP":lambda p_cfg, cidr : process_proto("udp", p_cfg, cidr),
     "SCTP":lambda p_cfg, cidr : process_proto("sctp", p_cfg, cidr),
+}
+
+ACTIVATORS = {
+    "dryrun-cbpf":dry_run_cbpf_apply_fn,
+    "dryrun-u32":dry_run_u32_apply_fn,
+    "cbpf":iptables_cbpf_apply_fn,
+    "u32":iptables_u32_apply_fn
 }
 
 
@@ -77,10 +138,12 @@ def makefilter_rule(p_cfg, cidr):
 
 class IngressFirewallPolicy(FirewallPolicy):
     '''Class representing an ingress firewall policy'''
-    def __init__(self, policy):
+    def __init__(self, interface, policy, options=None):
         super().__init__()
         self.policy = policy
         self.in_hardware = []
+        self.interface = interface
+        self.options = options
 
     def generate_pcap(self):
         '''Convert policy to the same form as pcap output'''
@@ -100,19 +163,19 @@ class IngressFirewallPolicy(FirewallPolicy):
         '''Compile the actual rules'''
         for rule in self.rules:
             #pylint: disable=unused-variable
+            rule.parse()
+            rule.drop_type(code_objects.ProgL2)
             for (name, helper) in HELPERS:
                 # we drop L2 for now. Both u32 offload and netfilter work
                 # with L3 frames omitting the L2 header.
                 # In fact, according to the comments in the driver code, U32 L2 not supported
-                rule.parse()
                 rule.add_helper(helper)
-                rule.drop_type(code_objects.ProgL2)
-                rule.compile()
+            rule.compile()
 
     def apply_to_hardware(self, apply_fn):
         '''Apply Policy'''
         while len(self.rules) > 0:
-            if apply_fn(self.rules[0]):
+            if apply_fn(self.interface, self.rules[0], self.options):
                 self.in_hardware.append(self.rules.pop(0))
             else:
                 break
@@ -131,8 +194,44 @@ class IngressFirewallPolicy(FirewallPolicy):
 
 def main():
     '''Load an ingress firewall ruleset'''
-    # TODO - add self/test execution
+
     policy = json.load(sys.stdin)
+
+    aparser = ArgumentParser(description=main.__doc__)
+    aparser.add_argument(
+       '--mode',
+        help='mode of operation dryrun, iptables',
+        type=str,
+        default="dryrun"
+    )
+    aparser.add_argument(
+       '--backend',
+        help='backend - u32, bpf',
+        type=str,
+        default="u32"
+    )
+    aparser.add_argument(
+       '--debug',
+        help='debug',
+        action='store_true'
+    )
+
+
+    args = vars(aparser.parse_args())
+
+    for interface in policy["interfaces"]:
+        ingress = IngressFirewallPolicy(interface, policy["ingress"])
+        ingress.generate_pcap()
+        if args.get("debug"):
+            for rule in ingress.rules:
+                print(rule.pfilter)
+        ingress.compile_pcap()
+        if args.get("debug"):
+            for rule in ingress.rules:
+                for helper in rule.compiled.code.keys():
+                    print(rule.compiled.get_code(helper))
+        ingress.apply_to_hardware(ACTIVATORS["{}-{}".format(args["mode"], args["backend"])])
+
 
 if __name__ == "__main__":
     main()

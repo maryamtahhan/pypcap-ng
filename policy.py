@@ -35,6 +35,12 @@ class PolicyEntry():
         self.compiled.compile(compiler_state)
         self.compiled.resolve_refs()
 
+    def dump_code(self, helper_id, fmt, options):
+        '''Get code for the corresponding helper_id'''
+        for helper in self.compiled.helpers:
+            if helper.helper_id == helper_id:
+                return helper.dump_code(fmt, options)
+
 
 class FirewallPolicy():
     '''Class representing a firewall policy'''
