@@ -195,7 +195,7 @@ class IngressFirewallPolicy(FirewallPolicy):
 def main():
     '''Load an ingress firewall ruleset'''
 
-    policy = json.load(sys.stdin)
+    model = json.load(sys.stdin)
 
     aparser = ArgumentParser(description=main.__doc__)
     aparser.add_argument(
@@ -219,8 +219,8 @@ def main():
 
     args = vars(aparser.parse_args())
 
-    for interface in policy["interfaces"]:
-        ingress = IngressFirewallPolicy(interface, policy["ingress"])
+    for (interface, policy) in model["IngressNodeFirewallNodeState"]["interfaceIngressRules"].items():
+        ingress = IngressFirewallPolicy(interface, policy)
         ingress.generate_pcap()
         if args.get("debug"):
             for rule in ingress.rules:
