@@ -154,10 +154,10 @@ IP_PROTOS= {
 }
 
 LOC_CONSTANTS = {
-    "icmptype":(1,1),
-    "icmpcode":(2,1),
-    "icmp6type":(1,1),
-    "icmp6code":(2,1),
+    "icmptype":(0,1),
+    "icmpcode":(1,1),
+    "icmp6type":(0,1),
+    "icmp6code":(1,1),
 }
 
 MISC_CONSTANTS = {
