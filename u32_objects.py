@@ -87,11 +87,11 @@ class U32LD(U32Code):
 
         try:
             if self.comp[COMP_OP].lower == self.comp[COMP_OP].upper:
-                value = "{:04x}".format(self.comp[COMP_OP].lower)
+                value = "0x{:04x}".format(self.comp[COMP_OP].lower)
             else:
-                value = "{:04x}:{:04x}".format(self.comp[COMP_OP].lower,self.comp[COMP_OP].upper)
+                value = "0x{:04x}:0x{:04x}".format(self.comp[COMP_OP].lower,self.comp[COMP_OP].upper)
 
-            return ret + f" 0x{mask:04x} = {value}"
+            return ret + f" & 0x{mask:04x} = {value}"
         except IndexError:
             pass
         except AttributeError:
@@ -102,7 +102,7 @@ class U32LD(U32Code):
 
         # no check - just offset (it is really a check 0-0xFFFF)
 
-        return ret + f" 0x{mask:04x} @"
+        return ret + f" & 0x{mask:04x} @"
 
 
 
@@ -161,7 +161,7 @@ class U32Helper(AbstractHelper):
         for insn in self.get_code():
             res +=(f"{insn} ")
 
-        res += "\n"
+        #res += "\n"
 
         return res
 

@@ -71,7 +71,7 @@ def form_args(interface, rule, mode, options):
         try:
             code = rule.dump_code("u32", "iptables", options)
             if len(code) > 0:
-                res = f"/sbin/iptables -A INPUT -j {rule.action} -i {interface} --u32 {code}"
+                res = f"/sbin/iptables -A INPUT -j {rule.action} -i {interface} -m u32  --u32 '{code}'"
                 u32_ok = True
         except KeyError:
             pass
@@ -80,7 +80,7 @@ def form_args(interface, rule, mode, options):
         try:
             code = rule.dump_code("cbpf", "iptables", options)
             if len(code) > 0:
-                res = f"/sbin/iptables -A INPUT -j {rule.action} -i {interface} --bpf {code}"
+                res = f"/sbin/iptables -A INPUT -j {rule.action} -i {interface} -m bpf --bpf '{code}'"
         except KeyError:
             pass
 
@@ -125,8 +125,8 @@ PROTO_MAP = {
 ACTIVATORS = {
     "dryrun-cbpf":dry_run_cbpf_apply_fn,
     "dryrun-u32":dry_run_u32_apply_fn,
-    "cbpf":iptables_cbpf_apply_fn,
-    "u32":iptables_u32_apply_fn
+    "iptables-cbpf":iptables_cbpf_apply_fn,
+    "iptables-u32":iptables_u32_apply_fn
 }
 
 
