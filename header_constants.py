@@ -94,6 +94,7 @@ IP_PROTOS= {
     "ip":	        0,	# internet protocol, pseudo protocol number
     "hopopt":	    0,	# IPv6 Hop-by-Hop Option [RFC1883]
     "icmp":	        1,	# internet control message protocol
+    "icmp6":	    1,	# ICMP v6 reuses same protocol code
     "igmp":	        2,	# Internet Group Management
     "ggp":	        3,	# gateway-gateway protocol
     "ipencap":	    4,	# IP encapsulated in IP (officially ``IP'')

@@ -526,11 +526,11 @@ class Prog8021Q(AbstractProgram):
 
 class ProgL3(AbstractProgram):
     '''Layer 3 protocol matcher'''
-    def __init__(self, match_object=None, attribs=None):
+    def __init__(self, match_object=None, attribs=None, ip_version=4):
         if attribs is not None:
             super().__init__(attribs=attribs)
         else:
-            super().__init__(match_object=match_object, frags=[ProgIP()])
+            super().__init__(match_object=match_object, frags=[ProgIP(ip_version=ip_version)])
             self.attribs["name"] = "l3"
 
 class ProgIP(AbstractProgram):

@@ -154,10 +154,15 @@ def p_pname(p):
     elif p[1] == "tcp":
         p[0] = code_objects.ProgTCP()
     else:
+        if "6" in p[1]:
+            ip_version = 6
+        else:
+            ip_version = 4
+            
         try:
             p[0] = code_objects.ProgL2(ETH_PROTOS[p[1]])
         except KeyError:
-            p[0] = code_objects.ProgL3(match_object=IP_PROTOS[p[1]])
+            p[0] = code_objects.ProgL3(match_object=IP_PROTOS[p[1]], ip_version=ip_version)
 
 def p_dqual(p):
     '''dqual : SRC

@@ -11,12 +11,13 @@ ACTIONS = ["DROP", "ACCEPT"]  # basic actions, extension - TBA
 
 class PolicyEntry():
     '''Generic policy rule'''
-    def __init__(self, action, pfilter, order=100, model=None):
+    def __init__(self, action, pfilter, order=100, model=None, v6=False):
         self.action = action
         self.pfilter = pfilter
         self.order = order
         self.model = model
         self.compiled = None
+        self.v6 = v6
 
     def parse(self):
         '''Invoke parser on rule'''

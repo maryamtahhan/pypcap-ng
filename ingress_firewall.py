@@ -6,6 +6,7 @@ import sys
 import json
 from argparse import ArgumentParser
 import subprocess
+from ipaddress import IPv6Address, IPv6Network, ip_address, ip_network
 import code_objects
 import bpf_objects
 import u32_objects
@@ -20,6 +21,20 @@ ACTION_MAP = {
     "Deny": "DROP",
     "Allow": "ACCEPT"
 }
+
+def is_v6(address):
+    '''Check if an address is v6'''
+    try:
+        addr = ip_address(address)
+        if isinstance(addr, IPv6Address):
+            return True
+    except ValueError:
+        # we let it raise a value error in this case
+        addr = ip_network(address)
+
+    return isinstance(addr, IPv6Network)
+
+
 
 def process_icmp(p_cfg, cidr):
     '''Process ICMP'''
@@ -46,6 +61,32 @@ def process_icmp(p_cfg, cidr):
     #pylint: disable=consider-using-f-string
     return "src {} and {}".format(cidr, " and ".join(pcap_expr))
 
+def process_icmp_v6(p_cfg, cidr):
+    '''Process ICMP'''
+    pcap_expr = []
+    try:
+        #pylint: disable=consider-using-f-string
+        pcap_expr.append("icmp6[icmptype] == {}".format(p_cfg["icmpv6"]["icmpType"]))
+    except KeyError:
+        pass
+
+    try:
+        #pylint: disable=consider-using-f-string
+        pcap_expr.append("icmp6[icmpcode] == {}".format(p_cfg["icmpv6"]["icmpCode"]))
+    except KeyError:
+        pass
+
+    if len(pcap_expr) == 0:
+        raise ValueError("Failed to process firewall policy")
+
+    if len(pcap_expr) == 1:
+        #pylint: disable=consider-using-f-string
+        return "src {} and {}".format(cidr, pcap_expr[0])
+
+    #pylint: disable=consider-using-f-string
+    return "src {} and {}".format(cidr, " and ".join(pcap_expr))
+
+
 def process_proto(proto, p_cfg, cidr):
     '''Process TCP/UDP/SCTP'''
     pcap_expr = []
@@ -67,11 +108,17 @@ def form_args(interface, rule, mode, options):
     res = ""
 
     u32_ok = False
+
+    if rule.v6:
+        iptables = "/sbin/ip6tables"
+    else:
+        iptables = "/sbin/iptables"
+
     if mode in ["u32", "auto"]:
         try:
             code = rule.dump_code("u32", "iptables", options)
             if len(code) > 0:
-                res = f"/sbin/iptables -A INPUT -j {rule.action} -i {interface} -m u32  --u32 '{code}'"
+                res = f"{iptables} -A INPUT -j {rule.action} -i {interface} -m u32  --u32 '{code}'"
                 u32_ok = True
         except KeyError:
             pass
@@ -80,7 +127,7 @@ def form_args(interface, rule, mode, options):
         try:
             code = rule.dump_code("cbpf", "iptables", options)
             if len(code) > 0:
-                res = f"/sbin/iptables -A INPUT -j {rule.action} -i {interface} -m bpf --bpf '{code}'"
+                res = f"{iptables} -A INPUT -j {rule.action} -i {interface} -m bpf --bpf '{code}'"
         except KeyError:
             pass
 
@@ -117,6 +164,7 @@ def iptables_cbpf_apply_fn(interface, rule, options):
 
 PROTO_MAP = {
     "ICMP":process_icmp,
+    "ICMPv6":process_icmp_v6,
     "TCP":lambda p_cfg, cidr : process_proto("tcp", p_cfg, cidr),
     "UDP":lambda p_cfg, cidr : process_proto("udp", p_cfg, cidr),
     "SCTP":lambda p_cfg, cidr : process_proto("sctp", p_cfg, cidr),
@@ -155,7 +203,8 @@ class IngressFirewallPolicy(FirewallPolicy):
                             ACTION_MAP[rule["action"]],
                             makefilter_rule(rule["protocolConfig"], cidr),
                             order=rule["order"],
-                            model=rule
+                            model=rule,
+                            v6=is_v6(cidr)
                         )
                     )
 

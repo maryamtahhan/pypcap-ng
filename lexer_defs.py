@@ -108,6 +108,7 @@ reserved = {
     'tcp' : 'TCP',
     'udp' : 'UDP',
     'icmp' : 'ICMP',
+    'icmp6' : 'ICMPV6',
     'igmp' : 'IGMP',
     'igrp' : 'IGRP',
     'pim' : 'PIM',
