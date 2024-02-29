@@ -118,7 +118,7 @@ def form_args(interface, rule, mode, options):
         try:
             code = rule.dump_code("u32", "iptables", options)
             if len(code) > 0:
-                res = f"{iptables} -A INPUT -j {rule.action} -i {interface} -m u32  --u32 '{code}'"
+                res = f"{iptables} -A IFW -j {rule.action} -i {interface} -m u32  --u32 '{code}'"
                 u32_ok = True
         except KeyError:
             pass
@@ -127,7 +127,7 @@ def form_args(interface, rule, mode, options):
         try:
             code = rule.dump_code("cbpf", "iptables", options)
             if len(code) > 0:
-                res = f"{iptables} -A INPUT -j {rule.action} -i {interface} -m bpf --bpf '{code}'"
+                res = f"{iptables} -A IFW -j {rule.action} -i {interface} -m bpf --bpf '{code}'"
         except KeyError:
             pass
 
@@ -145,7 +145,6 @@ def dry_run_cbpf_apply_fn(interface, rule, options):
 
 def iptables_u32_apply_fn(interface, rule, options):
     '''Apply via iptables'''
-    # for now - dummy, same as dry_run
     try:
         subprocess.run(form_args(interface, rule, "u32", options), shell=True, check=True)
         return True
@@ -154,12 +153,50 @@ def iptables_u32_apply_fn(interface, rule, options):
 
 def iptables_cbpf_apply_fn(interface, rule, options):
     '''Apply via iptables'''
-    # for now - dummy, same as dry_run
     try:
         subprocess.run(form_args(interface, rule, "cbpf", options), shell=True, check=True)
         return True
     except subprocess.CalledProcessError:
         return False
+
+PREAMBLE_DATA = [
+    "/sbin/iptables -F IFW",
+    "/sbin/iptables -D INPUT -j IFW",
+    "/sbin/iptables -X IFW",
+    "/sbin/iptables -N IFW",
+    "/sbin/iptables -A INPUT -j IFW",
+
+    "/sbin/ip6tables -F IFW",
+    "/sbin/ip6tables -D INPUT -j IFW",
+    "/sbin/ip6tables -X IFW",
+    "/sbin/ip6tables -N IFW",
+    "/sbin/ip6tables -A INPUT -j IFW",
+]
+
+CLOSURE_DATA = [
+    "/sbin/iptables -A IFW -j RETURN",
+    "/sbin/ip6tables -A IFW -j RETURN"
+]
+
+def dryrun_preamble_fn():
+    '''Apply via iptables'''
+    for preamble in PREAMBLE_DATA:
+        print(preamble)
+
+def dryrun_closure_fn():
+    '''Apply via iptables'''
+    for closure in CLOSURE_DATA:
+        print(closure)
+
+def iptables_preamble_fn():
+    '''Apply via iptables'''
+    for preamble in PREAMBLE_DATA:
+        subprocess.run(preamble, shell=True, check=False)
+
+def iptables_closure_fn():
+    '''Apply via iptables'''
+    for closure in CLOSURE_DATA:
+        subprocess.run(closure, shell=True, check=False)
 
 
 PROTO_MAP = {
@@ -177,6 +214,14 @@ ACTIVATORS = {
     "iptables-u32":iptables_u32_apply_fn
 }
 
+PREAMBLES = {
+    "dryrun":dryrun_preamble_fn,
+    "iptables":iptables_preamble_fn,
+}
+CLOSURES = {
+    "dryrun":dryrun_closure_fn,
+    "iptables":iptables_closure_fn,
+}
 
 def makefilter_rule(p_cfg, cidr):
     '''Generate an actual filter rule
@@ -268,6 +313,7 @@ def main():
 
     args = vars(aparser.parse_args())
 
+    PREAMBLES["{}".format(args["mode"])]()
     for (interface, policy) in model["IngressNodeFirewallNodeState"]["interfaceIngressRules"].items():
         ingress = IngressFirewallPolicy(interface, policy)
         ingress.generate_pcap()
@@ -280,6 +326,9 @@ def main():
                 for helper in rule.compiled.code.keys():
                     print(rule.compiled.get_code(helper))
         ingress.apply_to_hardware(ACTIVATORS["{}-{}".format(args["mode"], args["backend"])])
+
+    ingress.apply_to_hardware(ACTIVATORS["{}-{}".format(args["mode"], args["backend"])])
+    CLOSURES["{}".format(args["mode"])]()
 
 
 if __name__ == "__main__":
