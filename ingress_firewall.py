@@ -159,14 +159,17 @@ def iptables_cbpf_apply_fn(interface, rule, options):
     except subprocess.CalledProcessError:
         return False
 
-PREAMBLE_DATA = [
+FLUSH_DATA = [
     "/sbin/iptables -F IFW",
+    "/sbin/ip6tables -F IFW",
+]
+
+PREAMBLE_DATA = [
     "/sbin/iptables -D INPUT -j IFW",
     "/sbin/iptables -X IFW",
     "/sbin/iptables -N IFW",
     "/sbin/iptables -A INPUT -j IFW",
 
-    "/sbin/ip6tables -F IFW",
     "/sbin/ip6tables -D INPUT -j IFW",
     "/sbin/ip6tables -X IFW",
     "/sbin/ip6tables -N IFW",
@@ -178,6 +181,11 @@ CLOSURE_DATA = [
     "/sbin/ip6tables -A IFW -j RETURN"
 ]
 
+def dryrun_flush_fn():
+    '''Apply via iptables'''
+    for flush in FLUSH_DATA:
+        print(flush)
+
 def dryrun_preamble_fn():
     '''Apply via iptables'''
     for preamble in PREAMBLE_DATA:
@@ -187,6 +195,11 @@ def dryrun_closure_fn():
     '''Apply via iptables'''
     for closure in CLOSURE_DATA:
         print(closure)
+
+def iptables_flush_fn():
+    '''Apply via iptables'''
+    for flush in FLUSH_DATA:
+        subprocess.run(flush, shell=True, check=False)
 
 def iptables_preamble_fn():
     '''Apply via iptables'''
@@ -218,6 +231,12 @@ PREAMBLES = {
     "dryrun":dryrun_preamble_fn,
     "iptables":iptables_preamble_fn,
 }
+
+FLUSHES = {
+    "dryrun":dryrun_flush_fn,
+    "iptables":iptables_flush_fn,
+}
+
 CLOSURES = {
     "dryrun":dryrun_closure_fn,
     "iptables":iptables_closure_fn,
@@ -309,9 +328,16 @@ def main():
         help='debug',
         action='store_true'
     )
-
+    aparser.add_argument(
+       '--flush',
+        help='flush iptables',
+        action='store_true'
+    )
 
     args = vars(aparser.parse_args())
+
+    if (args["flush"]):
+        FLUSHES["{}".format(args["mode"])]()
 
     PREAMBLES["{}".format(args["mode"])]()
     for (interface, policy) in model["IngressNodeFirewallNodeState"]["interfaceIngressRules"].items():
