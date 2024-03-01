@@ -527,10 +527,10 @@ class U32ProgIPv6(U32Helper):
 
 
         if isinstance(addr, ipaddress.IPv6Network):
-            netmask = int(addr.netmask).to_bytes(16)
-            address = int(addr.network_address).to_bytes(16)
+            netmask = int(addr.netmask).to_bytes(16, byteorder='big')
+            address = int(addr.network_address).to_bytes(16, byteorder='big')
         else:
-            address = int(addr).to_bytes(16)
+            address = int(addr).to_bytes(16, byteorder='big')
             netmask = bytes([0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
                             0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
                             0xff, 0xff])

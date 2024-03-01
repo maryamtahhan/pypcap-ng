@@ -882,8 +882,8 @@ class CBPFProgIPv6(CBPFHelper):
 
 
         if isinstance(addr, ipaddress.IPv6Network):
-            netmask = int(addr.netmask).to_bytes(16)
-            address = int(addr.network_address).to_bytes(16)
+            netmask = int(addr.netmask).to_bytes(16, byteorder='big')
+            address = int(addr.network_address).to_bytes(16, byteorder='big')
 
             for nibble in range(0,4):
                 if nibble < 3:
@@ -896,7 +896,7 @@ class CBPFProgIPv6(CBPFHelper):
                     JEQ([int.from_bytes(address[nibble*4:nibble*4 + 4]), next_label, self.on_failure], mode=7)
                 ])
         else:
-            address = int(addr).to_bytes(16)
+            address = int(addr).to_bytes(16, byteorder=big)
             for nibble in range(0,4):
                 if nibble < 3:
                     next_label = "_v6_{}_{}".format(self.loc, nibble + 1)
