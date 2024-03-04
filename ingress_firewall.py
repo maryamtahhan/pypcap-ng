@@ -340,7 +340,7 @@ def main():
         FLUSHES["{}".format(args["mode"])]()
 
     PREAMBLES["{}".format(args["mode"])]()
-    for (interface, policy) in model["IngressNodeFirewallNodeState"]["interfaceIngressRules"].items():
+    for (interface, policy) in model.items():
         ingress = IngressFirewallPolicy(interface, policy)
         ingress.generate_pcap()
         if args.get("debug"):

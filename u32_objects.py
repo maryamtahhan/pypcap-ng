@@ -535,8 +535,8 @@ class U32ProgIPv6(U32Helper):
                             0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
                             0xff, 0xff])
         for nibble in range(0,4):
-            value = int.from_bytes(address[nibble*4:nibble*4 + 4])
-            mask = int.from_bytes(netmask[nibble*4:nibble*4 + 4])
+            value = int.from_bytes(address[nibble*4:nibble*4 + 4], 'big')
+            mask = int.from_bytes(netmask[nibble*4:nibble*4 + 4], 'big')
             self.add_code([
                 U32LD(location=location + nibble * 4, size=4),
                 U32SH(shift=0),

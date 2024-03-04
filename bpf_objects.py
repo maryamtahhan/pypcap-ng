@@ -892,8 +892,8 @@ class CBPFProgIPv6(CBPFHelper):
                     next_label = self.on_success
                 code.extend([
                     LD(location + nibble * 4, size=4, mode=1, label=f"_v6_{self.loc}_{nibble}"),
-                    AND(int.from_bytes(netmask[nibble*4:nibble*4 + 4]), mode=4),
-                    JEQ([int.from_bytes(address[nibble*4:nibble*4 + 4]), next_label, self.on_failure], mode=7)
+                    AND(int.from_bytes(netmask[nibble*4:nibble*4 + 4], 'big' ), mode=4),
+                    JEQ([int.from_bytes(address[nibble*4:nibble*4 + 4], 'big'), next_label, self.on_failure], mode=7)
                 ])
         else:
             address = int(addr).to_bytes(16, byteorder=big)
@@ -904,7 +904,7 @@ class CBPFProgIPv6(CBPFHelper):
                     next_label = self.on_success
                 code.extend([
                     LD(location + nibble * 4, size=4, mode=1, label=f"_v6_{self.loc}_{nibble}"),
-                    JEQ([int.from_bytes(address[nibble*4:nibble*4 + 4]), next_label, self.on_failure], mode=7)
+                    JEQ([int.from_bytes(address[nibble*4:nibble*4 + 4], 'big'), next_label, self.on_failure], mode=7)
                 ])
         self.add_code(code)
 
