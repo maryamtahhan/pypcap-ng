@@ -168,12 +168,12 @@ PREAMBLE_DATA = [
     "/sbin/iptables -D INPUT -j IFW",
     "/sbin/iptables -X IFW",
     "/sbin/iptables -N IFW",
-    "/sbin/iptables -A INPUT -j IFW",
+    "/sbin/iptables -I INPUT -j IFW",
 
     "/sbin/ip6tables -D INPUT -j IFW",
     "/sbin/ip6tables -X IFW",
     "/sbin/ip6tables -N IFW",
-    "/sbin/ip6tables -A INPUT -j IFW",
+    "/sbin/ip6tables -I INPUT -j IFW",
 ]
 
 CLOSURE_DATA = [
@@ -333,13 +333,26 @@ def main():
         help='flush iptables',
         action='store_true'
     )
+    aparser.add_argument(
+       '--append',
+        help='append iptables',
+        action='store_true',
+        default='false'
+    )
+    aparser.add_argument(
+       '--close',
+        help='close IFW chain in iptables',
+        action='store_true',
+        default='false'
+    )
 
     args = vars(aparser.parse_args())
 
     if (args["flush"]):
         FLUSHES["{}".format(args["mode"])]()
 
-    PREAMBLES["{}".format(args["mode"])]()
+    if (not args["append"]):
+        PREAMBLES["{}".format(args["mode"])]()
     for (interface, policy) in model.items():
         ingress = IngressFirewallPolicy(interface, policy)
         ingress.generate_pcap()
@@ -354,7 +367,9 @@ def main():
         ingress.apply_to_hardware(ACTIVATORS["{}-{}".format(args["mode"], args["backend"])])
 
     ingress.apply_to_hardware(ACTIVATORS["{}-{}".format(args["mode"], args["backend"])])
-    CLOSURES["{}".format(args["mode"])]()
+
+    if (args["close"]):
+        CLOSURES["{}".format(args["mode"])]()
 
 
 if __name__ == "__main__":
