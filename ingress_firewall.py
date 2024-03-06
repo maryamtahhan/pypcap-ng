@@ -333,26 +333,13 @@ def main():
         help='flush iptables',
         action='store_true'
     )
-    aparser.add_argument(
-       '--append',
-        help='append iptables',
-        action='store_true',
-        default='false'
-    )
-    aparser.add_argument(
-       '--close',
-        help='close IFW chain in iptables',
-        action='store_true',
-        default='false'
-    )
 
     args = vars(aparser.parse_args())
 
     if (args["flush"]):
         FLUSHES["{}".format(args["mode"])]()
 
-    if (not args["append"]):
-        PREAMBLES["{}".format(args["mode"])]()
+    PREAMBLES["{}".format(args["mode"])]()
     for (interface, policy) in model.items():
         ingress = IngressFirewallPolicy(interface, policy)
         ingress.generate_pcap()
@@ -368,8 +355,7 @@ def main():
 
     ingress.apply_to_hardware(ACTIVATORS["{}-{}".format(args["mode"], args["backend"])])
 
-    if (args["close"]):
-        CLOSURES["{}".format(args["mode"])]()
+    CLOSURES["{}".format(args["mode"])]()
 
 
 if __name__ == "__main__":
